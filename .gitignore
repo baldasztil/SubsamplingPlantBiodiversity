@@ -3,7 +3,7 @@
 .Rapp.history
 
 # Session Data files
-.RData
+*.RData
 
 # User-specific files
 .Ruserdata
@@ -43,6 +43,10 @@ raw_data/*
 clean_data/*
 data/*
 
+#output
+output/*
+visuals/*
+
 # you can make exceptions for specific files
 !code/data_dic/data_description.xlsx
 
@@ -56,6 +60,7 @@ data/*
 *.xls
 *.xlsx
 *.xml
+*.docx
 
 #Proj files 
 *.Rproj
