@@ -55,12 +55,16 @@ visuals/*
 *.pdf
 *.jpeg
 *.svg
+*.trmn
 
 *.csv
 *.xls
 *.xlsx
 *.xml
 *.docx
+*.txt
 
-#Proj files 
+#proj files 
 *.Rproj
+
+#specific files
