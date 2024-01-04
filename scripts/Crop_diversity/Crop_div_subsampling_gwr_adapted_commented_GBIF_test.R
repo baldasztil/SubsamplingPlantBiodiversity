@@ -126,7 +126,8 @@ message("Number of CPU cores in R: ", parallelly::availableCores())
 
 # Import data ------------------------------------------------------------------
 wcvp_raw <- fread("data/wcvp/wcvp_names.txt", header = T) 
-dist_raw <- fread("data/wcvp/wcvp_distribution.txt", header = T) 
+dist_raw <- fread("data/wcvp/wcvp_distribution.txt", header = T)
+gbif_dist <- read.csv("data/data_for_ludwig_ianondo.csv")
 
 
 tdwg_codes <- fread("data/tdwg_codes.csv", header = T) 
@@ -207,11 +208,7 @@ plantlist_dist <- dist_native %>%
   dplyr::select(plant_name_id,continent_code_l1,region_code_l2,area_code_l3)
 
 
-aa <- read.csv("data/data_for_ludwig_ianondo.csv")
-length(unique(aa$species))
-
-
-plantlist_dist2 <- aa %>% 
+plantlist_dist2 <- gbif_dist %>% 
   select(area_code_l3 = tdwg_code, plant_name_id = accepted_id)
 
 plantlist_dist3 <- plantlist_dist2 %>% 

@@ -24,6 +24,8 @@ library(khroma)
 library(tmaptools)
 library(reactablefmtr)
 library(gridExtra)
+library(rWCVP)
+library(perm.t.test)
 
 # Defining functions -----------------------------------------------------------
 theme_default.lb.boxplot <- function () {
@@ -83,7 +85,7 @@ theme_default.lb <- function () {
 }
 
 plotting.lines <- function (x) {
-  overall_top5 <- threshold_cont %>%
+  GLOBAL_top5 <- threshold_cont %>%
     ungroup() %>%
     filter(Continent == x) %>% 
     slice_max(ratio, by = c(Continent,family)) %>%
@@ -91,7 +93,7 @@ plotting.lines <- function (x) {
     slice(1:5) 
   
   plot <- samples_cumulative_rel %>% 
-    filter(family %in% overall_top5$family) %>%
+    filter(family %in% GLOBAL_top5$family) %>%
     ggplot(aes(x= log10(sp), y=mean, col = family)) +
     geom_line(lwd = 1)  +
     xlab("Sample size species (log10)") +
@@ -109,15 +111,15 @@ plotting.lines <- function (x) {
   plot
 }
 
-options(digits = 2)  
+options(digits = 5)  
 # Import data ------------------------------------------------------------------
 
 #data_out2 <- read.table("output/full_samples_steps_increasing_niter100.txt")
-richness_patterns <- read.csv("output/Overall_richness.csv")
+richness_patterns <- read.csv("output/overall_richness.csv")
 plants_full <- fread("data/wcvp_accepted_merged.txt")
 dist_native <- fread("data/dist_native.txt")
 
-tdwg_3 <- st_read(dsn = "data/wgsrpd-master/level3")
+tdwg_3 <- wgsrpd3
 tdwg_1 <- st_read(dsn = "data/wgsrpd-master/level1")
 
 tdwg_1_names <- as.data.frame(tdwg_1) %>% 
@@ -127,12 +129,12 @@ tdwg_1_names$LEVEL1_COD <- as.character(tdwg_1$LEVEL1_COD)
 
 
 #Get the path of filenames
-#list_data <- list.files("C:/Users/s2117440/OneDrive - Royal Botanic Garden Edinburgh/A_PhD/Chapters/Chapter1_UNEP_KEW/Projects/SubsamplingPlantBiodiversity/data/fullsamples", full.names = TRUE)
+list_data <- list.files("C:/Users/s2117440/OneDrive - Royal Botanic Garden Edinburgh/A_PhD/Chapters/Chapter1_UNEP_KEW/Projects/SubsamplingPlantBiodiversity/data/fullsamples", full.names = TRUE)
 #Read them in a list
-#samplelist <- lapply(list_data, fread)
+samplelist <- lapply(list_data, fread)
 
 #make big dataframe
-#data_out <- as.data.frame(do.call(rbind, samplelist))
+data_out <- as.data.frame(do.call(rbind, samplelist))
 
 
 
@@ -148,16 +150,98 @@ samples_cumulative_rel <- data_out %>%
          upper.ci = mean + qt(1 - (0.05 / 2), n.sample - 1) * se) %>% 
   left_join(tdwg_1_names, by = c("id" = "LEVEL1_COD")) %>% 
   mutate(Continent = LEVEL1_NAM,
-         Continent = ifelse(is.na(Continent), "OVERALL", Continent))
+         Continent = ifelse(is.na(Continent), "GLOBAL", Continent))
 
 
-
+ unique(samples_cumulative_rel$id)
 samples_cumulative_rich <- data_out2 %>% 
   mutate(LEVEL1_COD = as.character(LEVEL1_COD)) %>% 
   left_join(tdwg_1_names, by = "LEVEL1_COD") %>% 
   mutate(Continent = LEVEL1_NAM,
-         Continent = ifelse(is.na(Continent), "OVERALL", Continent))
+         Continent = ifelse(is.na(Continent), "GLOBAL", Continent))
 
+
+
+results <- read.csv("fullsamples_test.csv") %>% 
+  filter(id == "overall")
+
+install.packages("MKinfer")
+library(MKinfer)
+
+permutation_test100 <- function(results, n ) {
+  p_frame <- data.frame(matrix(nrow = 1, ncol = 2))
+  names(p_frame) <- c("p", "sp")
+  p_data <- results2 %>% 
+    filter(sp == n | sp %in% seq(n, n + 100,1)) %>% 
+    mutate(sp = ifelse(!sp == n, n+100, sp)) %>% 
+    dplyr::select(cor.sp, sp) 
+  ttest <- perm.t.test(cor.sp ~ sp, data = p_data,  R = 999, alternative = "less")
+  p_frame$perm_p <- ttest$perm.p.value
+  p_frame$p <-ttest$p.value
+  p_frame$sp <- paste(unique(p_data$sp)[1],"-",unique(p_data$sp[2]))
+  return(p_frame)
+}
+
+permutation_test <- function(results, n ) {
+  p_frame <- data.frame(matrix(nrow = 1, ncol = 2))
+  names(p_frame) <- c("p", "sp")
+  p_data <- results2 %>% 
+    filter(sp == n | sp == n + 100) %>% 
+    #mutate(sp = ifelse(!sp == n, n+100, sp)) %>% 
+    dplyr::select(cor.sp, sp) 
+  ttest <- perm.t.test(cor.sp ~ sp, data = p_data,  R = 999, alternative = "less")
+  p_frame$perm_p <- ttest$perm.p.value
+  p_frame$p <-ttest$p.value
+  p_frame$sp <- paste(unique(p_data$sp)[1],"-",unique(p_data$sp[2]))
+  return(p_frame)
+}
+
+
+
+
+
+resultsxx <- results2 %>% 
+  filter(sp <= 500) %>% 
+  filter(id == "overall") %>% 
+  mutate(sp = paste0("step",sp)) %>% 
+  mutate(sp = as.factor(sp)) %>% 
+  filter(!is.na(cor.sp)) %>% 
+  dplyr::select(cor.sp, sp)
+
+unique(results$sp)
+
+a <- lapply(1:1500, FUN = permutation_test, results = results)
+b <- lapply(1:1500, FUN = permutation_test100, results = results)
+
+xx <- do.call(rbind,a)
+xx$test <- "perm"
+xx$id <- as.numeric(rownames(xx))
+
+yy <- do.call(rbind,b)
+yy$test <- "permall100"
+yy$id <- as.numeric(rownames(yy))
+
+plot(xx$perm_p ~ xx$id)
+plot(yy$perm_p ~ yy$id)
+boxplot(yy$perm_p)
+boxplot(xx$perm_p)
+
+zz <- rbind(xx, yy)
+
+boxplot(zz$perm_p ~ zz$test)
+test <- zz %>% 
+  group_by(test) %>% 
+  filter(perm_p >= 0.05) %>% 
+  slice_min(n = 5, order_by = id)
+
+test2 <- results %>% 
+  filter(sp %in% test$id) %>% 
+  group_by(sp) %>% 
+  summarise(mean = mean(cor.sp))
+
+# Calculate p-values for consecutive steps
+nested_data <- results3 %>%
+  mutate(p_value = map2_dbl(results3[-n()]$data, results3[-1]$data, ~ permutation_test(.x, .y)))
 
 
 
@@ -165,7 +249,7 @@ samples_total <- data_out %>%
   mutate(LEVEL1_COD = as.character(id)) %>% 
   left_join(tdwg_1_names, by ="LEVEL1_COD") %>% 
   mutate(Continent = LEVEL1_NAM,
-         Continent = ifelse(is.na(Continent), "OVERALL", Continent))
+         Continent = ifelse(is.na(Continent), "GLOBAL", Continent))
   
   
 #Output analysis----------------------------------------------------------------
@@ -214,7 +298,7 @@ richness_patterns_con_nonen <- dist_native %>%
 
 
 richvsamplesize <- threshold %>%
-  filter(!Continent == "OVERALL") %>% 
+  filter(!Continent == "GLOBAL") %>% 
   left_join(richness_patterns, by = join_by("id" == "LEVEL_COD")) %>%
   left_join(richness_patterns_con_en, by = join_by("id" == "LEVEL_COD")) %>%
   left_join(richness_patterns_con_nonen, by = join_by("id" == "LEVEL_COD")) %>% 
@@ -231,8 +315,8 @@ richvsamplesize <- threshold %>%
 
 
 
-overall_patterns <- dist_native %>% 
-  summarise(Continent = "OVERALL", 
+GLOBAL_patterns <- dist_native %>% 
+  summarise(Continent = "GLOBAL", 
             sp = as.numeric(threshold[8,2]),
             richness = n_distinct(plant_name_id),
             rich_en = n_distinct(index_endemic$plant_name_id),
@@ -243,7 +327,7 @@ overall_patterns <- dist_native %>%
   bind_rows(richvsamplesize) %>% 
   replace(is.na(.), 0) 
 
-rich_summary <- overall_patterns %>% 
+rich_summary <- GLOBAL_patterns %>% 
   rename(threshold = sp, ratio_rich_tresh = ratio) 
 
 rich_table <- reactable(
@@ -295,7 +379,7 @@ samples_cumulative_rich <- sample_rich_threshold %>%
   mutate(LEVEL1_COD = as.character(LEVEL1_COD)) %>% 
   left_join(tdwg_1_names, by = "LEVEL1_COD") %>% 
   mutate(Continent = LEVEL1_NAM,
-         Continent = ifelse(is.na(Continent), "OVERALL", Continent))
+         Continent = ifelse(is.na(Continent), "GLOBAL", Continent))
 
 rich_species_1390 <- samples_cumulative_rich %>% 
   group_by(Continent) %>% 
@@ -335,14 +419,14 @@ ggsave(file = paste0("boxplots",
 
 
 # richness maps 
-rich_overall_con <- richness_patterns %>% 
+rich_GLOBAL_con <- richness_patterns %>% 
   filter(ID =="con") %>% 
   left_join(tdwg_1_names, by =c("LEVEL_COD" = "LEVEL1_COD"))
 
 rich_species_1390 <- samples_cumulative_rich %>% 
   group_by(LEVEL_COD) %>% 
   summarise(mean_richness_sample = mean(richness_sample),
-            richness_overall = mean(richness), 
+            richness_GLOBAL = mean(richness), 
             LEVEL1_COD = unique(LEVEL1_COD))
 
 
@@ -351,7 +435,7 @@ tdwg_3_mod <- tdwg_3 %>%
   left_join(rich_species_1390, by = c("LEVEL3_COD" = "LEVEL_COD")) 
 
 pattern <- ggplot(data = tdwg_3_mod) +
-  geom_sf(aes(fill = richness_overall)) +
+  geom_sf(aes(fill = richness_GLOBAL)) +
   scale_fill_gradient("Species (n)", low = "grey90", high = "grey1", na.value = "white") +
   ggtitle("Species richness (observed)") +  
   theme_bw(base_size = 28) +
@@ -379,13 +463,13 @@ viri <- viridisLite::viridis(100)
 
 samples_cumulative_rel$Continent <- as.factor(samples_cumulative_rel$Continent)
 samples_cumulative_rel$Continent<-factor(samples_cumulative_rel$Continent, levels=c("AFRICA","ANTARCTIC","ASIA-TEMPERATE","ASIA-TROPICAL",
-                                            "AUSTRALASIA","EUROPE","NORTHERN AMERICA","PACIFIC","SOUTHERN AMERICA","OVERALL"))
+                                            "AUSTRALASIA","EUROPE","NORTHERN AMERICA","PACIFIC","SOUTHERN AMERICA","GLOBAL"))
 
 
 
 curves <- ggplot(data = samples_cumulative_rel, aes(x=log10(sp), y=mean, col = Continent)) +
   geom_line(lwd = 1.5, alpha = 0.5)  +
-  geom_line(data = subset(samples_cumulative_rel, Continent == 'OVERALL'), 
+  geom_line(data = subset(samples_cumulative_rel, Continent == 'GLOBAL'), 
             lwd = 8, color = "midnightblue", alpha = 0.8) +
   geom_hline(yintercept=0.95, linetype="dashed", color = alpha("red", 0.6), lwd = 1.5) +
   xlab("Sample size species (log10)") +
