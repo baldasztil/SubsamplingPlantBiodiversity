@@ -17,12 +17,6 @@ library(doParallel)
 library(sf)
 library(GWmodel)    # to undertake the GWR
 library(foreach)
-library(parallelly)
-library(doFuture)
-
-
-
-
 
 # Defining functions -----------------------------------------------------------
 std.error <- function(x) sd(x)/sqrt(length(x))
@@ -58,26 +52,26 @@ subsampling.plants <- function(spec_n) {
     st_sf() %>% 
     as("Spatial")
   
-  
-  bw <- try(bw.gwr(richness ~ richness_sample, data=rich_rel_shp,
-                   approach = "AIC",
-                   adaptive = T))
+ 
+ bw <- try(bw.gwr(richness ~ richness_sample, data=rich_rel_shp,
+               approach = "AIC",
+               adaptive = T)) 
   
   if (!is.numeric(bw)) {
     bw <- bw_global
   }
   
   m.gwr <- try(gwr.basic(richness ~ richness_sample, data=rich_rel_shp,
-                         adaptive = T,
-                         bw = bw, 
-                         cv = T, 
-                         longlat = T))
+                      adaptive = T,
+                      bw = bw, 
+                      cv = T, 
+                      longlat = T)) 
   
   stats <- try(gwss(rich_rel_shp, vars = c("richness", "richness_sample"), adaptive = T, bw = bw))
   
   if (class(m.gwr)=="try-error" | class(stats)=="try-error") {
-    error_data <- as.data.frame(matrix(nrow = 10, ncol = 9))
-    names(error_data) <- c("id","cor.gwr", "cor.sp","sd.cor.gwr", "se.cor.gwr","sample_coef","sample_se","sp", "shapiro")
+    error_data <- as.data.frame(matrix(nrow = 10, ncol = 8))
+    names(error_data) <- c("id","cor.gwr", "cor.sp","sd.cor.gwr", "se.cor.gwr","sample_coef","sample_se","sp")
     error_data$sp <- length(cumulative_namelist)
     error_data$id <- c("1","2","3","4","5","6","7","8","9","overall")
     df <- error_data %>% replace(is.na(.), 0)
@@ -85,49 +79,53 @@ subsampling.plants <- function(spec_n) {
   }
   
   else {
-    res_extract <- as.data.frame(m.gwr$SDF@data) %>% 
-      dplyr::select(richness_sample_PRED = richness_sample,Local_R2, richness_sample_SE = richness_sample_SE, residual) %>% 
-      mutate(LEVEL3_COD = rich_rel_shp$LEVEL_COD) %>% 
-      left_join(tdwg_codes, by = "LEVEL3_COD") 
-    res_extract$cor.sp <- stats$SDF$Spearman_rho_richness.richness_sample
-    
-    continents <- res_extract %>% 
-      group_by(LEVEL1_COD) %>% 
-      summarise(cor.gwr = round(mean(Local_R2), digits = 3),
-                cor.sp = round(mean(cor.sp), digits = 3),
-                sd.cor.gwr = round(sd(Local_R2), digits = 3),
-                se.cor.gwr = round(std.error(Local_R2), digits = 3),
-                sample_coef = round(mean(richness_sample_PRED), digits = 3), 
-                sample_se = round(mean(richness_sample_SE), digits = 3)) %>% 
-      rename(id = LEVEL1_COD)
-    
-    overall <- res_extract %>% 
-      summarise(cor.gwr =   round(mean(Local_R2), digits = 3),
-                cor.sp = round(mean(cor.sp), digits = 3),
-                sd.cor.gwr  = round(sd(Local_R2), digits = 3),
-                se.cor.gwr  = round(std.error(Local_R2), digits = 3),
-                sample_coef = round(mean(richness_sample_PRED), digits = 3), 
-                sample_se = round(mean(richness_sample_SE), digits = 3), 
-                id = "overall")
-    
-    output_file <- rbind(continents, overall) %>% 
-      mutate(sp = length(cumulative_namelist),
-             shapiro = shapiro.test(res_extract$residual)$p.value)
-    
-    
-    return(output_file)
+   res_extract <- as.data.frame(m.gwr$SDF@data) %>% 
+     dplyr::select(richness_sample_PRED = richness_sample,Local_R2, richness_sample_SE = richness_sample_SE, residual) %>% 
+     mutate(LEVEL3_COD = rich_rel_shp$LEVEL_COD) %>% 
+     left_join(tdwg_codes, by = "LEVEL3_COD") 
+   res_extract$cor.sp <- stats$SDF$Spearman_rho_richness.richness_sample
+   
+   continents <- res_extract %>% 
+     group_by(LEVEL1_COD) %>% 
+     summarise(cor.gwr = mean(Local_R2),
+               cor.sp = mean(cor.sp),
+               sd.cor.gwr = sd(Local_R2),
+               se.cor.gwr = std.error(Local_R2),
+               sample_coef = mean(richness_sample_PRED), 
+               sample_se = mean(richness_sample_SE)) %>% 
+     rename(id = LEVEL1_COD)
+  
+   overall <- res_extract %>% 
+     summarise(cor.gwr =   mean(Local_R2),
+               cor.sp = mean(cor.sp),
+               sd.cor.gwr  = sd(Local_R2),
+               se.cor.gwr  = std.error(Local_R2),
+               sample_coef = mean(richness_sample_PRED), 
+               sample_se = mean(richness_sample_SE), 
+               id = "overall")
+   
+   output_file <- rbind(continents, overall) %>% 
+     mutate(sp = length(cumulative_namelist),
+            shapiro = shapiro.test(res_extract$residual)$p.value)
+  
+  if (length(cumulative_namelist) %in% seq(1,nrow(plantlist_names),200)){
+    a <-  paste0("There are ", length(cumulative_namelist) ," species in the subsample")
+    print(a)
+    write.table(a, paste0("data/fullsamples_test/checkpoints/Check@_",length(cumulative_namelist),"_lapply_id",sample(1:10000, 1, replace=TRUE),"sp.txt")) 
+    }
+  
+  # cumulative pattern
+  
+  return(output_file)
   }
 }
 
 
 # Working directory ------------------------------------------------------------
-message("Number of CPU cores in R: ", parallelly::availableCores())
 
 # Import data ------------------------------------------------------------------
 wcvp_raw <- fread("data/wcvp/wcvp_names.txt", header = T) 
 dist_raw <- fread("data/wcvp/wcvp_distribution.txt", header = T) 
-
-
 tdwg_codes <- fread("data/tdwg_codes.csv", header = T) 
 
 tdwg_3 <- st_read(dsn = "data/wgsrpd-master/level3")
@@ -151,8 +149,7 @@ wcvp_accepted <- wcvp_raw %>%
 
 
 dist_native <- dist_raw %>% 
-  filter(introduced == 0) %>%
-  filter(!location_doubtful == 1) %>% 
+  filter(introduced == 0) %>% 
   filter(!area == "") %>% 
   filter(plant_name_id %in% wcvp_accepted$plant_name_id)
 
@@ -207,10 +204,8 @@ plantlist_dist <- dist_native %>%
 plantlist_names <- plants_full %>%  
   dplyr::select(plant_name_id, taxon_rank, family, lifeform_description,taxon_name)
 
-
-
 rich_overall_bru_bw <- richness_patterns %>% 
-  filter(ID =="bru") %>%  
+  filter(ID =="bru") %>% 
   mutate(richness2 = richness) %>% 
   left_join(midpoints_red, by =c("LEVEL_COD" = "LEVEL3_COD")) %>% 
   left_join(tdwg_codes, by =c("LEVEL_COD" = "LEVEL3_COD")) %>% 
@@ -233,31 +228,12 @@ rich_overall_bru <- richness_patterns %>%
 ######
 ######
 
-# Define the number of cores you want to use
-#num_cores <- 10  # Adjust this based on your system
-
-# Create a cluster
-#cl <- makeCluster(num_cores)
 
 
-# Register the cluster with foreach
-#registerDoParallel(cl)
+samples <- lapply(seq(1,5000,1), subsampling.plants)
 
-plan(multisession)
+xx <- do.call(bind_rows, samples)
+write.table(xx, paste0("data/fullsamples_test/Samples_iteration_gwr_lapply_",sample(1:10000000, 1, replace=TRUE),".txt")) 
 
-
-Sys.time()
-
-samples <- foreach(i = 1:4, .options.future = list(seed = TRUE, scheduling = 1.0)) %dofuture% { 
-   lapply(seq(1,1000,1), subsampling.plants)
-}
-
-Sys.time()
-
-xx <- rbindlist(samples)
-write.table(xx, paste0("data/fullsamples_test/Samples_iteration_gwr_future_for",sample(1:10000000, 1, replace=TRUE),".txt")) 
-
-
-stopCluster(cl)
 
 

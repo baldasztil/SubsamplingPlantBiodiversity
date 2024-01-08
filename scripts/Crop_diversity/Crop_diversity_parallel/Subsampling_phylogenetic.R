@@ -19,7 +19,6 @@ library(phytools)
 library(caper)
 library(dplyr)
 
-options(ragg.max_dim = 10000000000)
 # Defining functions -----------------------------------------------------------
 theme_default.lb <- function () {
   theme(
@@ -55,21 +54,10 @@ gen_list <- read.csv("data/phylomaker/plant_genus_list.csv")
 output_tree <- read.tree("data/phylomaker/output_tree.tre")
 out_splist <- fread("data/phylomaker/output_splist.txt")
 
-phy_richness_patterns <- fread("data/phylomaker/phylo_div_named.txt")
 
 # Import data ------------------------------------------------------------------
 
-phy_richness_patterns %>% 
-  group_by(LEVEL1_NAM) %>% 
-  summarise(sum_phy = sum(phy_div)) %>% 
-  arrange(desc(sum_phy))
 
-
-
-matrix <- compute.mr(output_tree, type = "matrix")
-
-
-aa <- output_tree$edge
 
 tdwg_3 <- st_read(dsn = "data/wgsrpd-master/level3")
 tdwg_2 <- st_read(dsn = "data/wgsrpd-master/level2")
@@ -77,15 +65,6 @@ tdwg_1 <- st_read(dsn = "data/wgsrpd-master/level1")
 richness_patterns <- fread("data/richness_patterns.txt")
 plants_full_accepted <- fread("data/wcvp_accepted_merged.txt") %>% 
   mutate(label = paste0(genus,"_",species))
-
-tdwg_1_names <- as.data.frame(tdwg_1) %>% 
-  dplyr::select(LEVEL1_NAM, LEVEL1_COD) %>% 
-  mutate(LEVEL1_COD = as.character(LEVEL1_COD))
-
-richness_patterns %>% 
-  right_join(tdwg_1_names, by = c("LEVEL_COD" = "LEVEL1_COD")) %>% 
-  arrange(desc(richness))
-
 
 
 missing_sp <- out_splist %>% 
@@ -129,11 +108,9 @@ bru_tips <-intersect(temp$label,
 no_tip_needed <-plants_full_accepted %>% 
   filter(!label %in% bru_tips)
 
-
-area_codes <- unique(temp$area)
-
 drop_tree_sample <-drop.tip(output_tree,no_tip_needed$label)
 
+area_codes <- unique(temp$area)
 bru_phy_rich <- data.frame(matrix(nrow = length(area_codes), ncol = 2))
 names(bru_phy_rich) <- c("area_code_l3", "phy_div")
 start.time <- Sys.time() # time keeping 
@@ -158,4 +135,4 @@ for (i in 1: length(area_codes)) {
   print(paste0("Currently located in ",area_codes[i], " (",i,"/",length(area_codes),")", "|", time.laps))
 }
      
-write.table(bru_phy_rich, "bru_phy_rich.txt")  
+write.table(bru_phy_rich, "data/phylogeny/bru_phy_rich.txt")  

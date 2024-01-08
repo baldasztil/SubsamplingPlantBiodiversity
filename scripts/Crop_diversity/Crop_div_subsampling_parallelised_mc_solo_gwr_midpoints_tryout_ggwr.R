@@ -24,8 +24,9 @@ library(tmap)
 library(GWmodel)    # to undertake the GWR
 library(fitdistrplus)
 library(gamlss)
-
-
+library(spdep)
+library(spmodel)
+library(patchwork)
 
 # Defining functions -----------------------------------------------------------
 subsampling.plants <- function(spec_n) {
@@ -57,10 +58,15 @@ subsampling.plants <- function(spec_n) {
     left_join(sample_rich_bru, by = "LEVEL_COD") %>% 
     replace(is.na(.), 0) %>% 
     mutate(sp = length(cumulative_namelist)) %>% 
-    left_join(tdwg_3_red, by = c("LEVEL_COD" ="LEVEL3_COD")) %>%  # tdwg_3_red
-    #distinct(LEVEL_COD, richness, .keep_all = T) %>%
-    st_sf() %>% 
-    as("Spatial") 
+    left_join(tdwg_3, by = c("LEVEL_COD" ="LEVEL3_COD")) %>% 
+    st_sf()
+  
+  
+
+  spar <- spautor(richness ~ richness_sample, data = rich_rel, spcov_type = "car")
+  spar2 <- spautor(richness ~ 1, data = rich_rel, spcov_type = "car")
+  
+  glance(spar)
   
   rich_rel2 <- rich_overall_bru %>% 
     left_join(sample_rich_bru, by = "LEVEL_COD") %>% 
@@ -70,10 +76,167 @@ subsampling.plants <- function(spec_n) {
     #distinct(LEVEL_COD, richness, .keep_all = T) %>%
     st_sf() %>% 
     as("Spatial") 
+
+    
+    rich_rel_shp <- dist %>% 
+      group_by(area_code_l3) %>% 
+      summarise(richness_sample = n_distinct(plant_name_id)) %>% 
+      rename(LEVEL_COD = area_code_l3) %>% 
+      right_join(rich_overall_bru, by = "LEVEL_COD") %>%
+      left_join(midpoints_red, by = c("LEVEL_COD" = "LEVEL3_COD")) %>% 
+      replace(is.na(.), 0) %>% 
+      mutate(sp = length(cumulative_namelist),
+             richness_sample = richness_sample,
+             richness = richness) %>% 
+      st_sf() %>% 
+      as("Spatial")
+    
+    rich_rel_shp2 <- dist %>% 
+      group_by(area_code_l3) %>% 
+      summarise(richness_sample = n_distinct(plant_name_id)) %>% 
+      rename(LEVEL_COD = area_code_l3) %>% 
+      right_join(rich_overall_bru, by = "LEVEL_COD") %>%
+      left_join(midpoints_red, by = c("LEVEL_COD" = "LEVEL3_COD")) %>% 
+      replace(is.na(.), 0) %>% 
+      mutate(sp = length(cumulative_namelist),
+             richness_sample = richness_sample,
+             richness = richness) %>% 
+      st_sf() %>% 
+      dplyr::select(geometry, richness, richness_sample) %>% 
+      as("Spatial")
+    
   
+  rich_rel3 <- rich_overall_bru %>% 
+    left_join(sample_rich_bru, by = "LEVEL_COD") %>% 
+    replace(is.na(.), 0) %>% 
+    mutate(sp = length(cumulative_namelist)) %>% 
+    left_join(tdwg_3, by = c("LEVEL_COD" ="LEVEL3_COD")) %>%  # tdwg_3_red
+    #distinct(LEVEL_COD, richness, .keep_all = T) %>%
+    #dplyr::select(geometry) %>% 
+    st_sf()
+  pred_sar <- splm(richness ~ richness_sample, rich_rel, "exponential")
+  glance(pred_sar)
+  pred_lm <- lm(richness ~ richness_sample, rich_rel)
+  glance(pred_lm)
+  
+  bw <- bw.gwr(richness ~ richness_sample, data=rich_rel_shp,
+                   approach = "AIC",
+                   adaptive = T)
+  
+  m.gwr <- gwr.basic(richness ~ richness_sample, data=rich_rel_shp,
+                         adaptive = T,
+                         bw = bw, 
+                         cv = T, 
+                         longlat = T)
+  
+  rich_rel3$preds <- predict(pred_sar, newdata = rich_rel3)
+  rich_rel3$preds_lm <- predict(pred_lm, newdata = rich_rel3)
+  
+  se_preds <- do.call(cbind,predict(pred_sar, newdata = rich_rel3, se.fit = T))
+  se_preds_lm <- do.call(cbind,predict(pred_lm, newdata = rich_rel3, se.fit = T))
+  
+
+
+  pred_gwr <- gwr.predict(richness ~ richness_sample, rich_rel_shp,
+              rich_rel_shp2, bw = bw, kernel="bisquare",adaptive=T,
+              longlat=T)
+  
+  pred_gwr_ext <- as.data.frame(pred_gwr$SDF$prediction)
+  names(pred_gwr_ext) <- "preds_gwr"
+  pred_gwr_ext$LEVEL_COD <- rich_rel_shp$LEVEL_COD
+  
+
+  rich_rel_pred <- rich_rel3 %>% 
+    left_join(pred_gwr_ext, by = "LEVEL_COD") %>% 
+    mutate(preds_diff = richness - preds, 
+           preds_lm_diff = richness - preds_lm, 
+           preds_gwr_diff = richness - preds_gwr) %>% 
+    dplyr::select(richness, richness_sample, preds, preds_lm, preds_gwr, 
+                  preds_diff, preds_lm_diff, preds_gwr_diff, 
+                  LEVEL3_NAM, LEVEL1_COD.x) %>% 
+    st_drop_geometry()
+  
+summary(rich_rel_pred)
+  
+  
+rich_rel_pred_plot <- rich_rel3 %>% 
+  left_join(pred_gwr_ext, by = "LEVEL_COD") %>% 
+  mutate(preds_diff = richness - preds, 
+         preds_lm_diff = richness - preds_lm, 
+         preds_gwr_diff = richness - preds_gwr) %>% 
+  dplyr::select(richness, richness_sample, preds, preds_lm, preds_gwr, 
+                preds_diff, preds_lm_diff, preds_gwr_diff, 
+                LEVEL3_NAM, LEVEL1_COD.x)
+
+a <-  ggplot(rich_rel_pred_plot, aes(fill = preds)) +
+    geom_sf(size = 2.5) +
+    scale_fill_viridis_c() +
+    theme_gray(base_size = 18) +
+  ggtitle("preds")
+  
+b <-  ggplot(rich_rel_pred_plot, aes(fill = preds_lm)) +
+    scale_fill_viridis_c() +
+    geom_sf(size = 2.5) +
+    theme_gray(base_size = 18) +
+  ggtitle("preds_lm")
+
+  
+c <-  ggplot(rich_rel_pred_plot, aes(fill = preds_gwr)) +
+    scale_fill_viridis_c() +
+    geom_sf(size = 2.5) +
+    theme_gray(base_size = 18) +
+  ggtitle("preds_gwr")
+
+  
+d <-  ggplot(rich_rel_pred_plot, aes(fill = richness)) +
+    scale_fill_viridis_c() +
+    geom_sf(size = 2.5) +
+    theme_gray(base_size = 18) + 
+  ggtitle("richness")
+
+e <- a + b + c + d
+plot(e)  
+
+
+library(colorspace)
+a <-  ggplot(rich_rel_pred_plot, aes(fill = preds_diff)) +
+  geom_sf(size = 2.5) +
+  scale_fill_continuous_diverging(palette = "Blue-Red") +
+  theme_minimal(base_size = 18) +
+  ggtitle("preds")
+
+b <-  ggplot(rich_rel_pred_plot, aes(fill = preds_lm_diff)) +
+  scale_fill_continuous_diverging(palette = "Blue-Red") +
+  geom_sf(size = 2.5) +
+  theme_minimal(base_size = 18) +
+  ggtitle("preds_lm")
+
+
+c <-  ggplot(rich_rel_pred_plot, aes(fill = preds_gwr_diff)) +
+  scale_fill_continuous_diverging(palette = "Blue-Red") +
+  geom_sf(size = 2.5) +
+  theme_minimal(base_size = 18) +
+  ggtitle("preds_gwr")
+
+
+d <-  ggplot(rich_rel_pred_plot, aes(fill = richness)) +
+  scale_fill_viridis_c() +
+  geom_sf(size = 2.5) +
+  theme_minimal(base_size = 18) + 
+  ggtitle("richness")
+
+e <- a + b + c + d
+plot(e)  
+  
+sulfmod <- splm(sulfate ~ 1, sulfate, spcov_type = "spherical")
+  predict(sulfmod, newdata = sulfate_preds, se.fit = TRUE)
+  
+  sulfate_preds
   plot(rich_rel2)
   hist(sqrt(rich_rel2$richness))
   hist(sqrt(rich_rel2$richness_sample))
+  plot(rich_rel2$richness ~ rich_rel2$richness_sample)
+  
   plot(sqrt(rich_rel2$richness) ~ sqrt(rich_rel2$richness_sample))
   xx <- lm(sqrt(richness) ~ sqrt(richness_sample), data = rich_rel2)
   yy <- lm(richness ~richness_sample, data = rich_rel2)
@@ -85,6 +248,7 @@ subsampling.plants <- function(spec_n) {
   plot(xx)
   hist(xx$residuals)
   res <- as.numeric(xx$residuals)
+  aa <- fitdistrplus::fitdist(res, "norm")
   aa <- fitdistrplus::fitdist(res, "norm")
   fit <- fitDist(res, k = 2, type = "realAll", trace = T, try.gamlss = TRUE)
   summary(fit)
@@ -102,24 +266,26 @@ subsampling.plants <- function(spec_n) {
    #       coords=cbind(rich_rel$lon, rich_rel$lat), adapt = T, method = "aic")
   dmat <- gw.dist(coordinates(rich_rel2), focus=0, p=2, theta=0, longlat=F)
   
-  GWRbandwidth2  <- bw.ggwr(sqrt(richness) ~ sqrt(richness_sample), data=rich_rel2,
-                            adaptive =   T, dMat = dmat, longlat = F, approach = "CV")
+  GWRbandwidth2  <- bw.ggwr(richness ~ richness_sample, data= rich_rel2,
+                            adaptive =   T, dMat = dmat, longlat = T, approach = "AIC")
   
   GWRbandwidth_gwr  <- bw.gwr(sqrt(richness) ~ sqrt(richness_sample), data=rich_rel2,
                             adaptive =   T, longlat = F, approach = "CV")
 
   
-  gwr_boot <- gwr.bootstrap(sqrt(richness) ~ sqrt(richness_sample), data=rich_rel2,
-                        adaptive = T) 
+  gwr_boot <- gwr.bootstrap(richness ~ richness_sample, data=rich_rel2,
+                        adaptive = T, longlat = T, dMat = dmat, verbose = TRUE, 
+                        approach = "AIC" ) 
   
   gwr_gen <- gwr.generalised(sqrt(richness) ~ sqrt(richness_sample), data=rich_rel2, bw= GWRbandwidth_gwr, 
                             adaptive = T)    
   
   robust_gwr <- gwr.robust(sqrt(richness) ~ sqrt(richness_sample), data=rich_rel2, bw= GWRbandwidth_gwr, 
-             adaptive = T)
+             adaptive = T, )
   
-  ggwr.model <- ggwr.basic(sqrt(richness) ~ sqrt(richness_sample), data=rich_rel2,
+  ggwr.model <- ggwr.basic(richness ~ richness_sample, data=rich_rel2,
                 bw=GWRbandwidth2 , adaptive = T, maxiter = 100) 
+  
   stats <- as.data.frame(ggwr.model$GW.diagnostic)
   
  gwr.model.selection(DeVar = "richness", InDeVars = c("richness_sample"), data=rich_rel2, bw=GWRbandwidth_gwr, 
@@ -283,7 +449,7 @@ tdwg_3_red <- st_read(dsn = "data/wgsrpd-master/level3_red") %>%
   dplyr::select(LEVEL3_COD, geometry) %>%  
   st_make_valid()
 
-
+tdwg_3 <- rWCVP::wgsrpd3
 aa <- st_make_valid(tdwg_3)
 
 midpoints_raw <- st_centroid(aa)

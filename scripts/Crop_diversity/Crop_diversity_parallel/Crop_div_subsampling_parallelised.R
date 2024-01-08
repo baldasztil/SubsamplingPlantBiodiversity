@@ -11,13 +11,86 @@
 
 
 # Libraries --------------------------------------------------------------------
-library(tidyr)
-library(dplyr)
-library(purrr)
-library(progress)
+library(tidyverse)
 library(data.table)
 library(ggplot2)
+library(parallel)
+library(doParallel)
 # Defining functions -----------------------------------------------------------
+subsampling.plants <- function(x) {
+  cumulative_namelist <- c()
+  list_rich_rel_cumulative <- list()
+  
+  plantlist_names_left <- plantlist_names %>% 
+    filter(!plant_name_id %in%  cumulative_namelist)
+  if (nrow(plantlist_names_left) > x) {
+    species_sample <- sample_n(plantlist_names_left, x)
+    # too include last sample
+  } else {
+    species_sample <- plantlist_names_left
+  }
+  cumulative_namelist <- c(cumulative_namelist, species_sample$plant_name_id)
+  species <-plantlist_names %>% 
+    filter(plant_name_id %in%  cumulative_namelist)
+  
+  dist <- dist_native %>% 
+    filter(plant_name_id %in% species$plant_name_id)
+  
+  # richness patterns across brus
+  sample_rich_bru <- dist %>% 
+    group_by(area_code_l3) %>% 
+    summarise(richness_sample = n_distinct(plant_name_id)) %>% 
+    rename(LEVEL_COD = area_code_l3)
+  
+  rich_rel <- rich_overall_bru %>% 
+    left_join(sample_rich_bru, by = "LEVEL_COD") %>% 
+    replace(is.na(.), 0) %>% 
+    mutate(sp = length(cumulative_namelist))
+  # measuring correlation
+  
+  # overall
+  rich_rel_bru <- rich_rel %>% 
+    summarise(cor.sp = cor.test(richness_sample, richness,
+                                method="spearman", exact =F)[[4]],
+              cor.pe = as.numeric(cor(richness_sample, richness, 
+                                      method="pearson"))) %>% 
+    mutate(id = "overall",
+           sp = length(cumulative_namelist))
+  # per continent 
+  cor.sp <- rich_rel %>% 
+    split(.$LEVEL1_COD) %>% 
+    map_dbl(~cor.test(.$richness_sample, .$richness, 
+                      method="spearman", data = ., exact =F)[[4]])
+  cor.pe <- rich_rel %>% 
+    split(.$LEVEL1_COD) %>% 
+    map_dbl(~cor.test(.$richness_sample, .$richness, 
+                      method="pearson", data = ., exact =F)[[4]])  
+  
+  # bind all
+  spear <- as.data.frame(cor.sp) %>% 
+    mutate(id = rownames(.))
+  rich_rel_con <- as.data.frame(cor.pe) %>% 
+    mutate(id = rownames(.),
+           sp = length(cumulative_namelist)) %>% 
+    left_join(spear, by = "id")
+  
+  #if (length(cumulative_namelist) %in% seq(1,nrow(plantlist_names),10000)){
+   # print(paste0("There are ", length(cumulative_namelist) ," species in the subsample")) 
+  #}
+  
+  # cumulative patterns
+  if (length(cumulative_namelist) %in% seq(0,nrow(plantlist_names),1000)){
+    print(paste0("There are ", length(cumulative_namelist) ," species in the subsample")) 
+}
+  return(bind_rows(rich_rel_bru, rich_rel_con))
+}
+parallel.subsampling <- function (x) {
+  samples <- list()
+  for (i in 1:x)  {
+    samples[[i]] <- parLapply(clust, seq(0,nrow(plantlist_names),1), subsampling.plants)
+  }
+  return(samples)
+}
 
 # Working directory ------------------------------------------------------------
 # Import data ------------------------------------------------------------------
@@ -103,95 +176,18 @@ plantlist_dist <- dist_native %>%
 plantlist_names <- plants_full %>%  
   select(plant_name_id, taxon_rank, family, lifeform_description,taxon_name)
 
-#plantlist_names <- plants_full %>%  
- # select(plant_name_id, taxon_rank, family, lifeform_description,taxon_name) %>%
-  #sample_n(350250)
-
 rich_overall_bru <- richness_patterns %>% 
   filter(ID =="bru") %>% 
   left_join(tdwg_codes, by =c("LEVEL_COD" = "LEVEL3_COD"))
 
 ######
-start.time <- Sys.time()
-cumulative_namelist <- data.frame()
-rich_rel_cumulative <- data.frame()
-rich_cumulative <- data.frame()
-samplelist <- list()
-samples <- list()
-for (x in 1:100) {
-    repeat{
-      # randomly sampling the data for species ids 
-      plantlist_names_left <- plantlist_names %>% 
-        filter(!plant_name_id %in%  cumulative_namelist$plant_name_id)
-      # too include last sample (smaller than 500)
-      if (nrow(plantlist_names_left) > 100) {
-        species_sample <- sample_n(plantlist_names_left, 100)
-      } else {
-        species_sample <- plantlist_names_left
-      }
-      cumulative_namelist <- rbind(cumulative_namelist, species_sample)
-      species <- cumulative_namelist
-      
-      # caluclating sample species richness
-      dist <- dist_native %>% 
-        filter(plant_name_id %in% species$plant_name_id)
-      
-      # richness patterns across brus
-      sample_rich_bru <- dist %>% 
-        group_by(area_code_l3) %>% 
-        summarise(richness_sample = n_distinct(plant_name_id)) %>% 
-        rename(LEVEL_COD = area_code_l3)
-      
-      rich_rel <- rich_overall_bru %>% 
-        left_join(sample_rich_bru, by = "LEVEL_COD") %>% 
-        replace(is.na(.), 0) %>% 
-        mutate(sp = nrow(cumulative_namelist))
-      # measuring correlation
-      
-      # overall
-      rich_rel_bru <- rich_rel %>% 
-        summarise(cor.sp = cor.test(richness_sample, richness,
-                                               method="spearman", exact =F)[[4]],
-                  cor.pe = as.numeric(cor(richness_sample, richness, 
-                                               method="pearson"))) %>% 
-        mutate(id = "overall",
-               sp = nrow(cumulative_namelist))
-      # per continent 
-      cor.sp <- rich_rel %>% 
-        split(.$LEVEL1_COD) %>% 
-        map_dbl(~cor.test(.$richness_sample, .$richness, 
-                          method="spearman", data = ., exact =F)[[4]])
-        cor.pe <- rich_rel %>% 
-        split(.$LEVEL1_COD) %>% 
-        map_dbl(~cor.test(.$richness_sample, .$richness, 
-                          method="pearson", data = ., exact =F)[[4]])  
-        
-        # bind all
-        spear <- as.data.frame(cor.sp) %>% 
-          mutate(id = rownames(.))
-        rich_rel_con <- as.data.frame(cor.pe) %>% 
-        mutate(id = rownames(.),
-               sp = nrow(cumulative_namelist)) %>% 
-        left_join(spear, by = "id")
-  
-        # cumulative patterns
-        rich_rel_cumulative <- rbind(rich_rel_cumulative,rich_rel_bru, rich_rel_con)
-      if (nrow(cumulative_namelist) == nrow(plantlist_names)){
-        break
-      }
-    if (nrow(cumulative_namelist) %in% seq(0,nrow(plantlist_names),1000)){
-    print(paste0("There are ", nrow(cumulative_namelist) ," species in the subsample")) 
-    }
-  }
-    samplelist[[x]] <- rich_rel_cumulative 
-    cumulative_namelist <- data.frame()
-    rich_rel_cumulative <- data.frame()
-    print(paste0("This is iteration ", x))
-    end.time <- Sys.time()
-    time.taken <- end.time - start.time
-    print(time.taken)
-}
+clust <- makeCluster(20)
+clusterExport(clust, c("dist_native","plantlist_dist","plantlist_names","rich_overall_bru"))
+clusterEvalQ(clust, library(tidyverse))
+doParallel::registerDoParallel(clust)
 
+samples_rel <- parallel.subsampling(x=100)
+stopCluster(clust)
 
-data_out <- as.data.frame(do.call(rbind, samplelist))
+data_out <- as.data.frame(do.call(bind_rows, samples_rel))
 write.table(data_out, "full_samples_rel.txt")

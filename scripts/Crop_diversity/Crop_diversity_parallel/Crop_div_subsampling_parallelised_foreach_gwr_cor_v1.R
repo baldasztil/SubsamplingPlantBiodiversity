@@ -16,11 +16,18 @@ library(parallel)
 library(doParallel)
 library(sf)
 library(GWmodel)    # to undertake the GWR
-library(spgwr)
+library(foreach)
+library(parallelly)
+library(doFuture)
+
+
+
+
+
 # Defining functions -----------------------------------------------------------
+std.error <- function(x) sd(x)/sqrt(length(x))
 subsampling.plants <- function(spec_n) {
   cumulative_namelist <- c()
-  list_rich_rel_cumulative <- list()
   
   plantlist_names_left <- plantlist_names %>% 
     filter(!plant_name_id %in%  cumulative_namelist)
@@ -38,74 +45,83 @@ subsampling.plants <- function(spec_n) {
     filter(plant_name_id %in% species$plant_name_id)
   
   # richness patterns across brus
-  sample_rich_bru <- dist %>% 
+  rich_rel_shp <- dist %>% 
     group_by(area_code_l3) %>% 
     summarise(richness_sample = n_distinct(plant_name_id)) %>% 
-    rename(LEVEL_COD = area_code_l3)
-
-
-  # overall
-  
-  rich_rel_shp <- rich_overall_bru %>% 
-    left_join(sample_rich_bru, by = "LEVEL_COD") %>%
+    rename(LEVEL_COD = area_code_l3) %>% 
+    right_join(rich_overall_bru, by = "LEVEL_COD") %>%
     left_join(midpoints_red, by = c("LEVEL_COD" = "LEVEL3_COD")) %>% 
     replace(is.na(.), 0) %>% 
-    mutate(sp = length(cumulative_namelist)) %>% 
+    mutate(sp = length(cumulative_namelist),
+           richness_sample = sqrt(richness_sample),
+           richness = sqrt(richness)) %>% 
     st_sf() %>% 
     as("Spatial")
-
-   #sink("/dev/nul") 
   
-  bw <- gwr.sel(richness ~ richness_sample, data=rich_rel_shp,
-        method = "aic",
-        adapt =  F, 
-        verbose = F, 
-        show.error.messages = FALSE)
   
-  #bw <- bw.gwr(richness ~ richness_sample, data=rich_rel_shp,
-            #   approach = "AIC",
-             #  adaptive = F)
-   #sink()
-   
-   m.gwr <- gwr.basic(richness ~ richness_sample, data=rich_rel_shp,
-                      adaptive = T,
-                      bw = bw, 
-                      cv = T) 
-   
-   
-   res <- as.data.frame(m.gwr$SDF@data)
-   res_extract <- res %>% 
-     select(richness_sample_PRED = richness_sample,Local_R2,richness_sample_SE) %>% 
-     mutate(LEVEL3_COD = rich_rel_shp$LEVEL_COD) %>% 
-     left_join(tdwg_codes, by = "LEVEL3_COD") 
-   
-   
-   continents <- res_extract %>% 
-     group_by(LEVEL1_COD) %>% 
-     summarise(cor.gwr = mean(Local_R2),
-               sample_coef = mean(richness_sample_PRED), 
-               sample_se = mean(richness_sample_SE)) %>% 
-     rename(id = LEVEL1_COD)
+  bw <- try(bw.gwr(richness ~ richness_sample, data=rich_rel_shp,
+                   approach = "AIC",
+                   adaptive = T))
   
-   overall <- res_extract %>% 
-     summarise(cor.gwr = mean(Local_R2),
-               sample_coef = mean(richness_sample_PRED), 
-               sample_se = mean(richness_sample_SE), 
-               id = "overall")
-   
-   output_file <- rbind(continents, overall) %>% 
-     mutate(sp = length(cumulative_namelist))
-  
-  if (length(cumulative_namelist) %in% seq(1,nrow(plantlist_names),10000)){
-    print(paste0("There are ", length(cumulative_namelist) ," species in the subsample")) 
+  if (!is.numeric(bw)) {
+    bw <- bw_global
   }
   
-  # cumulative pattern
+  m.gwr <- try(gwr.basic(richness ~ richness_sample, data=rich_rel_shp,
+                         adaptive = T,
+                         bw = bw, 
+                         cv = T, 
+                         longlat = T))
   
-  return(output_file)
+  stats <- try(gwss(rich_rel_shp, vars = c("richness", "richness_sample"), adaptive = T, bw = bw))
+  
+  if (class(m.gwr)=="try-error" | class(stats)=="try-error") {
+    error_data <- as.data.frame(matrix(nrow = 10, ncol = 9))
+    names(error_data) <- c("id","cor.gwr", "cor.sp","sd.cor.gwr", "se.cor.gwr","sample_coef","sample_se","sp", "shapiro")
+    error_data$sp <- length(cumulative_namelist)
+    error_data$id <- c("1","2","3","4","5","6","7","8","9","overall")
+    df <- error_data %>% replace(is.na(.), 0)
+    return(df)
+  }
+  
+  else {
+    res_extract <- as.data.frame(m.gwr$SDF@data) %>% 
+      dplyr::select(richness_sample_PRED = richness_sample,Local_R2, richness_sample_SE = richness_sample_SE, residual) %>% 
+      mutate(LEVEL3_COD = rich_rel_shp$LEVEL_COD) %>% 
+      left_join(tdwg_codes, by = "LEVEL3_COD") 
+    res_extract$cor.sp <- stats$SDF$Spearman_rho_richness.richness_sample
+    
+    continents <- res_extract %>% 
+      group_by(LEVEL1_COD) %>% 
+      summarise(cor.gwr = round(mean(Local_R2), digits = 3),
+                cor.sp = round(mean(cor.sp), digits = 3),
+                sd.cor.gwr = round(sd(Local_R2), digits = 3),
+                se.cor.gwr = round(std.error(Local_R2), digits = 3),
+                sample_coef = round(mean(richness_sample_PRED), digits = 3), 
+                sample_se = round(mean(richness_sample_SE), digits = 3)) %>% 
+      rename(id = LEVEL1_COD)
+    
+    overall <- res_extract %>% 
+      summarise(cor.gwr =   round(mean(Local_R2), digits = 3),
+                cor.sp = round(mean(cor.sp), digits = 3),
+                sd.cor.gwr  = round(sd(Local_R2), digits = 3),
+                se.cor.gwr  = round(std.error(Local_R2), digits = 3),
+                sample_coef = round(mean(richness_sample_PRED), digits = 3), 
+                sample_se = round(mean(richness_sample_SE), digits = 3), 
+                id = "overall")
+    
+    output_file <- rbind(continents, overall) %>% 
+      mutate(sp = length(cumulative_namelist),
+             shapiro = shapiro.test(res_extract$residual)$p.value)
+    
+    
+    return(output_file)
+  }
 }
 
+
 # Working directory ------------------------------------------------------------
+message("Number of CPU cores in R: ", parallelly::availableCores())
 
 # Import data ------------------------------------------------------------------
 wcvp_raw <- fread("data/wcvp/wcvp_names.txt", header = T) 
@@ -183,26 +199,60 @@ richness_patterns <- rbind(richness_patterns1,richness_patterns2,
 
 # Analysis ---------------------------------------------------------------------
 plantlist_dist <- dist_native %>% 
-  select(plant_name_id,continent_code_l1,region_code_l2,area_code_l3)
+  dplyr::select(plant_name_id,continent_code_l1,region_code_l2,area_code_l3)
 
 plantlist_names <- plants_full %>%  
-  select(plant_name_id, taxon_rank, family, lifeform_description,taxon_name)
+  dplyr::select(plant_name_id, taxon_rank, family, lifeform_description,taxon_name)
+
+rich_overall_bru_bw <- richness_patterns %>% 
+  filter(ID =="bru") %>% 
+  mutate(richness2 = richness) %>% 
+  left_join(midpoints_red, by =c("LEVEL_COD" = "LEVEL3_COD")) %>% 
+  left_join(tdwg_codes, by =c("LEVEL_COD" = "LEVEL3_COD")) %>% 
+  st_sf() %>% 
+  as("Spatial") 
+
+
+bw_global <- bw.gwr(sqrt(richness) ~ sqrt(richness2), data=rich_overall_bru_bw,
+       approach = "AIC",
+       adaptive = T)
 
 rich_overall_bru <- richness_patterns %>% 
   filter(ID =="bru") %>% 
   left_join(midpoints_red, by =c("LEVEL_COD" = "LEVEL3_COD")) %>% 
-  left_join(tdwg_codes, by =c("LEVEL_COD" = "LEVEL3_COD")) %>% 
+  left_join(tdwg_codes, by =c("LEVEL_COD" = "LEVEL3_COD")) %>%  
   dplyr::select(-geometry)
 
+
+
 ######
 ######
 
-for (i in 1:1)  {
-  samples <- list()
-  print(paste0("This is iteration ", i))
-  samples[[1]] <- mclapply(seq(1, nrow(plantlist_names),1), mc.cores = 3, subsampling.plants)
-  xx <- do.call(bind_rows, samples[[1]])
-  write.table(xx, paste0("data/fullsamples_test/Samples_iteration_gwr",sample(1:10000000, 1, replace=TRUE),".txt")) # data/fullsamples_test/
+# Define the number of cores you want to use
+num_cores <- 30  # Adjust this based on your system
+
+# Create a cluster
+cl <- makeCluster(num_cores)
+
+
+# Register the cluster with foreach
+#registerDoParallel(cl)
+
+plan(multicore, workers = 30)
+
+
+Sys.time()
+
+samples <- foreach(i = 1:5, .options.future = list(seed = TRUE, scheduling = 2.0)) %dofuture% { 
+   lapply(seq(1,nrow(plantlist_names),1), subsampling.plants)
 }
+
+Sys.time()
+
+xx <- rbindlist(samples)
+write.table(xx, paste0("data/fullsamples_test/Samples_iteration_gwr_future_for",sample(1:10000000, 1, replace=TRUE),".txt")) 
+
+
+stopCluster(cl)
 
 

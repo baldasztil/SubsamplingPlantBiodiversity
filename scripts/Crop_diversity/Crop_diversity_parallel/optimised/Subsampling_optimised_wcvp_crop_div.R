@@ -1,4 +1,5 @@
 library(DEoptim)
+library(progress)
 library(tidyverse)
 library(data.table)
 library(sf)
@@ -7,8 +8,7 @@ library(doSNOW)
 
 
 
-output <- function(species=NULL,best_corr=NULL)
-{
+output <- function(species=NULL,best_corr=NULL) {
   me <- data.frame(
     Species = species,
     best_corr = best_corr
@@ -120,7 +120,7 @@ upper_bound <- nrow(plantlist_names) # Go up to the last species
 results_list <- vector("list", length = 1390)
 
 # Define the number of cores you want to use
-num_cores <- 30  # Adjust this based on your system
+num_cores <- 60  # Adjust this based on your system
 
 # Create a cluster
 cl <- makeCluster(num_cores)
@@ -131,22 +131,29 @@ registerDoSNOW(cl)
 
 
 
+iterations <- 5123
+pb <- txtProgressBar(max = iterations, style = 3)
+progress <- function(n) setTxtProgressBar(pb, n)
+opts <- list(progress = progress)
+
+
 solutions <- foreach(i = 1:5123, 
                      .packages = c("tidyverse", "DEoptim"), 
                      .combine = "rbind",  
-                     .options.snow = opts, 
+                     .options.snow = opts,
                      .verbose = T) %dopar% 
   {
                        
     de_result <- DEoptim(objective, lower = i, upper = i,
                          DEoptim.control(VTR = -Inf, strategy = 2,
-                                         bs = FALSE, itermax = 1000, CR = 0.5, F = 0.8, 
+                                         bs = FALSE, itermax = 10000, CR = 0.5, F = 0.8, 
                                          storepopfreq = 1, trace = FALSE, parallelType = "foreach"))
-    write.table(i, file=paste("data/optimised/outfile/outfile_",i,"_Species_corr",round(de_result$optim$bestval*-1, digits = 3),".txt"))
+    
     output(de_result$optim$bestmem, de_result$optim$bestval*-1)
     }
 
 write.table(solutions, "data/optimised/DEoptim_results.txt")
+close(pb)
 stopCluster(cl)
 
 

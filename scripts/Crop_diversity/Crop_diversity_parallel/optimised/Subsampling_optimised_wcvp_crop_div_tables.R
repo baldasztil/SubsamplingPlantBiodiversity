@@ -7,8 +7,7 @@ library(doSNOW)
 
 
 
-output <- function(species=NULL,best_corr=NULL)
-{
+output <- function(species=NULL,best_corr=NULL) {
   me <- data.frame(
     Species = species,
     best_corr = best_corr
@@ -47,6 +46,15 @@ richness_patterns <- fread("data/richness_patterns.txt")
 plants_full <- fread("data/wcvp_accepted_merged.txt")
 dist_native <- fread("data/dist_native.txt")
 
+
+sample <- sample(plants_full$plant_name_id, 10000)
+
+plants_sample <- plants_full %>%  
+  filter(plant_name_id %in% sample)
+
+dist_sample <- dist_native %>%  
+  filter(plant_name_id %in% sample)
+
 # creating objects for the function
 
 plantlist_names <- plants_full %>% 
@@ -54,6 +62,8 @@ plantlist_names <- plants_full %>%
 
 plantlist_dist <- dist_native %>% 
   select(plant_name_id,continent_code_l1,region_code_l2,area_code_l3)
+
+
 
 
 richness_patterns_con <- plantlist_dist %>% 
@@ -89,6 +99,13 @@ rich_overall_bru <- richness_patterns %>%
   filter(ID =="bru") %>% 
   left_join(tdwg_codes, by =c("LEVEL_COD" = "LEVEL3_COD"))
 
+
+
+
+
+
+
+
 #clusterExport(cl = NULL, varlist, envir = .GlobalEnv)
 # Ver 1
 
@@ -99,6 +116,7 @@ upper_bound <- nrow(plantlist_names) # Go up to the last species
 # Initialize DE parameters
 
 
+results_list <- vector("list", length = 1390)
 
 # Define the number of cores you want to use
 num_cores <- 30  # Adjust this based on your system
@@ -115,13 +133,15 @@ registerDoSNOW(cl)
 solutions <- foreach(i = 1:5123, 
                      .packages = c("tidyverse", "DEoptim"), 
                      .combine = "rbind",  
+                     .options.snow = opts, 
                      .verbose = T) %dopar% 
   {
                        
     de_result <- DEoptim(objective, lower = i, upper = i,
                          DEoptim.control(VTR = -Inf, strategy = 2,
-                                         bs = FALSE, itermax = 1000, CR = 0.5, F = 0.8, 
+                                         bs = FALSE, itermax = 10000, CR = 0.5, F = 0.8, 
                                          storepopfreq = 1, trace = FALSE, parallelType = "foreach"))
+    write.table(i, file=paste("data/optimised/outfile/outfile_",i,"_Species_corr",round(de_result$optim$bestval*-1, digits = 3),".txt"))
     output(de_result$optim$bestmem, de_result$optim$bestval*-1)
     }
 

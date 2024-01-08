@@ -110,7 +110,7 @@ subsampling.plants <- function(spec_n) {
   
   if (length(cumulative_namelist) %in% seq(1,nrow(plantlist_names),1000)){
     a <-  paste0("There are ", length(cumulative_namelist) ," species in the subsample")
-    write.table(a, paste0("data/fullsamples_test/checkpoints/Check@_",length(cumulative_namelist),"_id",sample(1:10000, 1, replace=TRUE),"sp.txt")) 
+    write.table(a, paste0("data/fullsamples_test/checkpoints/MC_Check@_mclapply_",length(cumulative_namelist),"_id",sample(1:10000, 1, replace=TRUE),"sp.txt")) 
     }
   
   # cumulative pattern
@@ -229,10 +229,10 @@ rich_overall_bru <- richness_patterns %>%
 
 
 
-samples <- lapply(seq(1,5000,100), subsampling.plants)
+samples <- mclapply(seq(1,5000,1), subsampling.plants, mc.cores = 4)
 
 xx <- do.call(bind_rows, samples)
-write.table(xx, paste0("data/fullsamples_test/Samples_iteration_gwr",sample(1:10000000, 1, replace=TRUE),".txt")) 
+write.table(xx, paste0("data/fullsamples_test/MC_Samples_iteration_gwr_mclapply_",sample(1:10000000, 1, replace=TRUE),".txt")) 
 
 
 

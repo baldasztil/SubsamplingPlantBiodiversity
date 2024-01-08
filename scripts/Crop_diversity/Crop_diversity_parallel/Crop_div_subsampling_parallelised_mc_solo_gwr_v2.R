@@ -18,7 +18,6 @@ library(sf)
 library(GWmodel)    # to undertake the GWR
 
 # Defining functions -----------------------------------------------------------
-std.error <- function(x) sd(x)/sqrt(length(x))
 subsampling.plants <- function(spec_n) {
   cumulative_namelist <- c()
   
@@ -38,26 +37,39 @@ subsampling.plants <- function(spec_n) {
     filter(plant_name_id %in% species$plant_name_id)
   
   # richness patterns across brus
-  rich_rel_shp <- dist %>% 
+  sample_rich_bru <- dist %>% 
     group_by(area_code_l3) %>% 
     summarise(richness_sample = n_distinct(plant_name_id)) %>% 
-    rename(LEVEL_COD = area_code_l3) %>% 
-    left_join(rich_overall_bru, by = "LEVEL_COD") %>%
+    rename(LEVEL_COD = area_code_l3)
+
+
+  # overall
+  
+  rich_rel_shp <- rich_overall_bru %>% 
+    left_join(sample_rich_bru, by = "LEVEL_COD") %>%
     left_join(midpoints_red, by = c("LEVEL_COD" = "LEVEL3_COD")) %>% 
     replace(is.na(.), 0) %>% 
     mutate(sp = length(cumulative_namelist)) %>% 
     st_sf() %>% 
     as("Spatial")
-  
 
+   #sink("/dev/nul") 
+
+ # bw_spgwr <- gwr.sel(richness ~ richness_sample, data=rich_rel_shp,
+     #   method = "aic",
+    #    adapt =  T, 
+    #    verbose = F, 
+     #   show.error.messages = FALSE)
+  
   bw <- try(bw.gwr(richness ~ richness_sample, data=rich_rel_shp,
                approach = "AIC",
-               adaptive = T)) 
-  
+               adaptive = T)) # the problem is that it gives me an NA for species n < 5
+  # can fix with capture output or use global bandwith
+   #sink()
   if (!is.numeric(bw)) {
     bw <- bw_global
   }
-  
+   
   m.gwr <- try(gwr.basic(richness ~ richness_sample, data=rich_rel_shp,
                       adaptive = T,
                       bw = bw, 
@@ -72,24 +84,26 @@ subsampling.plants <- function(spec_n) {
   }
 
   else {
-   res_extract <- as.data.frame(m.gwr$SDF@data) %>% 
+  # m.gwr <- gwr(richness ~ richness_sample, data=rich_rel_shp,
+   #             adapt = bw_spgwr, 
+    #                  gweight = gwr.bisquare) 
+   
+   res <- as.data.frame(m.gwr$SDF@data)
+   res_extract <- res %>% 
      select(richness_sample_PRED = richness_sample,Local_R2,richness_sample_SE) %>% 
      mutate(LEVEL3_COD = rich_rel_shp$LEVEL_COD) %>% 
      left_join(tdwg_codes, by = "LEVEL3_COD") 
    
+   
    continents <- res_extract %>% 
      group_by(LEVEL1_COD) %>% 
      summarise(cor.gwr = mean(Local_R2),
-               sd.cor.gwr = sd(Local_R2),
-               se.cor.gwr = std.error(Local_R2),
                sample_coef = mean(richness_sample_PRED), 
                sample_se = mean(richness_sample_SE)) %>% 
      rename(id = LEVEL1_COD)
   
    overall <- res_extract %>% 
      summarise(cor.gwr = mean(Local_R2),
-               sd.cor.gwr  = sd(Local_R2),
-               se.cor.gwr  = std.error(Local_R2),
                sample_coef = mean(richness_sample_PRED), 
                sample_se = mean(richness_sample_SE), 
                id = "overall")
@@ -97,10 +111,8 @@ subsampling.plants <- function(spec_n) {
    output_file <- rbind(continents, overall) %>% 
      mutate(sp = length(cumulative_namelist))
   
-  if (length(cumulative_namelist) %in% seq(1,nrow(plantlist_names),100)){
-    print(paste0("There are ", length(cumulative_namelist) ," species in the subsample"))
-    a <-  paste0("There are ", length(cumulative_namelist) ," species in the subsample")
-    write.table(a, paste0("data/fullsamples_test/checkpoints/Check@_",length(cumulative_namelist),"sp.txt")) 
+  if (length(cumulative_namelist) %in% seq(1,nrow(plantlist_names),10000)){
+    print(paste0("There are ", length(cumulative_namelist) ," species in the subsample")) 
   }
   
   # cumulative pattern
@@ -108,7 +120,6 @@ subsampling.plants <- function(spec_n) {
   return(output_file)
   }
 }
-
 
 # Working directory ------------------------------------------------------------
 
@@ -217,8 +228,9 @@ rich_overall_bru <- richness_patterns %>%
 ######
 ######
 
-samples <- mclapply(seq(1, nrow(plantlist_names),1), mc.cores = 1, subsampling.plants)
+samples <- list()
+samples <- mclapply(seq(1, nrow(plantlist_names),1), mc.cores = 4, subsampling.plants)
 xx <- do.call(bind_rows, samples)
-write.table(xx, paste0("data/fullsamples_test/Samples_iteration_gwr",sample(1:10000000, 1, replace=TRUE),".txt")) 
+write.table(xx, paste0("data/fullsamples_test/Samples_iteration_gwr",sample(1:10000000, 1, replace=TRUE),".txt")) # data/fullsamples_test/
 
 

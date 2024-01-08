@@ -20,8 +20,7 @@ library(doSNOW)
 library(progress)
 
 
-output <- function(species=NULL,best_corr=NULL)
-{
+output <- function(species=NULL,best_corr=NULL) {
   me <- data.frame(
     Species = species,
     best_corr = best_corr
@@ -49,7 +48,7 @@ objective <- function(subset_indices) {
 }
 
 
-full_redlist <- read.csv("data/red/srli_full.csv")
+full_redlist <- read.csv("data/red/redlist_full_syn.csv")
 richness_patterns_allplants <- fread("data/richness_patterns.txt")
 
 
@@ -126,5 +125,5 @@ solutions <- foreach(i = 1:5123,
     output(de_result$optim$bestmem, de_result$optim$bestval*-1)
   }
 
-write.table(solutions, "data/optimised/DEoptim_results_srli.txt")
+write.table(solutions, "data/optimised/DEoptim_results_redlist.txt")
 stopCluster(cl)

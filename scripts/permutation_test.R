@@ -1,8 +1,14 @@
+library(coin)
+library(snow)
+library(tidyverse)
+library(MKinfer)
+library(future)
+library(future.apply)
+
+
+
 results <- read.csv("fullsamples_test.csv") %>% 
   mutate(sp = as.factor(sp))
-
-install.packages("MKinfer")
-library(MKinfer)
 
 permutation_test100 <- function(results, n ) {
   p_frame <- data.frame(matrix(nrow = 1, ncol = 2))
@@ -32,118 +38,92 @@ permutation_test <- function(results, n ) {
   return(p_frame$perm_p)
 }
 
-as.data.table(results2)[, perm.t.test(cor.sp ~ sp, data = p_data,  R = 999, alternative = "less"), by = c("id", "sp")]
+#as.data.table(results2)[, perm.t.test(cor.sp ~ sp, data = p_data,  R = 999, alternative = "less"), by = c("id", "sp")]
 
 
-results2 <- results %>% 
-  filter(id %in% c("1", "2")) %>% 
+resultsxx <- results %>% 
+  filter(id %in% c("3")) %>% 
   filter(sp == 100)
 
-unique(results2$sp)
 
-install.packages("coin")
-library(coin)
 
 
 permutation_test_cont <- function(results, n ) {
 
   p_data <- results %>% 
     group_by(id) %>% 
-    filter(sp == n | sp == n + 100) %>% 
+    filter(sp == n | sp == n + 100) %>% # sp == ceiling(n + n*0.25)
     dplyr::select(cor.sp, sp, id) 
   
-  start <- Sys.time()
-  test_data <- p_data %>% 
-    group_by(id) %>% 
-    reframe(perm_p = perm.t.test(cor.sp ~ sp, data = p_data,R = 999, 
-                                 alternative = "less")$perm.p.value,
-            steps = paste(unique(p_data$sp)[1],"-",unique(p_data$sp[2])),
-            id = unique(id), 
-            n = n)
-  Sys.time() - start
+  unique_sp <- unique(p_data$sp)
   
-  start <- Sys.time()
-  test_data <- p_data %>%
-    mutate(steps = paste(unique_sp[1], "-", unique_sp[2])) %>%
-    group_by(id) %>%
-    summarise(perm_p = perm.t.test(cor.sp ~ sp, data = ., R = 999, alternative = "less")$perm.p.value) %>%
-    ungroup()
-  Sys.time() - start
-  
-  start <- Sys.time()
   test_data <- p_data %>%
     mutate(steps = paste(unique_sp[1], "-", unique_sp[2]),
            sp = as.factor(sp)) %>%
     group_by(id) %>%
-    reframe(perm_p = pvalue(oneway_test(cor.sp ~ sp, data = ., distribution = 
-                                            approximate(nresample = 10000), 
-                                   alternative = "less"))[1], 
-             n = n,
+    reframe(perm_p = coin::pvalue(oneway_test(cor.sp ~ sp,  
+                                        distribution = approximate(nresample = 9999),
+                                                                   #parallel = "snow",
+                                                                   #cl = cl), 
+                                        alternative = "less"))[1], 
+            norm_p = t.test(cor.sp ~ sp,  alternative = "less")$p.value,
+            n = n,
             steps = unique(steps), 
             id = unique(id)) 
-  Sys.time() - start
   
   return(test_data)
 }
 
+t_test_cont <- function(results, n ) {
+  
+  p_data <- results %>% 
+    group_by(id) %>% 
+    filter(sp == n | sp == n + 100) %>% 
+    #mutate(sp = ifelse(!sp == n, n+100, sp)) %>% 
+    # sp == ceiling(n + n*0.25)
+    dplyr::select(cor.sp, sp, id) 
+  
+  unique_sp <- unique(p_data$sp)
+  
+  test_data <- p_data %>%
+    mutate(steps = paste(unique_sp[1], "-", unique_sp[2]),
+           sp = as.factor(sp)) %>%
+    group_by(id) %>%
+    reframe(norm_p = t.test(cor.sp ~ sp, alternative = "less")$p.value,
+            n = n,
+            steps = unique(steps), 
+            id = unique(id)) 
+  return(test_data)
+}
 
-aa <- oneway_test(cor.sp ~ sp, data = p_data, distribution = approximate(nresample = 99999), 
-            alternative = "less", conf.level = 0.95)
-aa <- perm.t.test(cor.sp ~ sp, data = p_data, R = 999, alternative = "less")
-pvalue(aa, level = 0.05)
-pvalue_interval(aa)
+plan(multisession, workers = 6)
 
-aa@distribution@pvalue()
-size(aa)
-
-permutation_test_cont(results, n = 500)
-
-
-
-results_sum <- results %>%  
-  group_by(id) %>% 
-  summarise()
-
-permutation_test(results, 1500)
-
-
-resultsxx <- results2 %>% 
-  filter(sp <= 500) %>% 
-  filter(id == "overall") %>% 
-  mutate(sp = paste0("step",sp)) %>% 
-  mutate(sp = as.factor(sp)) %>% 
-  filter(!is.na(cor.sp)) %>% 
-  dplyr::select(cor.sp, sp)
-
-unique(results$sp)
-
-a <- lapply(1:1500, FUN = permutation_test_cont, results = results)
+start <- Sys.time()
+a <- future_lapply(seq(100,2500, 1), FUN = permutation_test_cont, results = results, future.seed = T)
 #b <- lapply(1:1500, FUN = permutation_test100, results = results)
+Sys.time() - start
 
 xx <- do.call(rbind,a)
-xx$test <- "perm"
-xx$id <- as.numeric(rownames(xx))
 
-yy <- do.call(rbind,b)
-yy$test <- "permall100"
-yy$id <- as.numeric(rownames(yy))
 
-plot(xx$perm_p ~ xx$id)
-plot(yy$perm_p ~ yy$id)
-boxplot(yy$perm_p)
-boxplot(xx$perm_p)
-
-zz <- rbind(xx, yy)
-
-boxplot(zz$perm_p ~ zz$test)
-
-test <- zz %>% 
-  group_by(test) %>% 
-  filter(test == "perm") %>% 
+plot(xx$norm_p ~ xx$n)
+plot(xx$norm_p ~ xx$n)
+lines(x=c(0,1900), y= c(0.05, 0.05), lwd =3, col = "red")
+boxplot(xx$norm_p ~ xx$id)
+hist(xx$norm_p)
+lmm <- lm(norm_p ~ n, data = xx)
+summary(lmm)
+plot(lmm)
+test <- xx %>% 
+  group_by(id) %>% 
   filter(perm_p >= 0.05) %>% 
-  slice_min(n = 20, order_by = id)
+  slice_min(n = 1, order_by = n) 
+
+aa <- unique(test$n)
+plot(aa)
+boxplot(aa)
 
 test2 <- results %>% 
-  filter(sp %in% test$id) %>% 
-  group_by(sp) %>% 
-  summarise(mean = mean(cor.sp))
+  filter(sp %in% c(test$n, (test$n * 0.25))) %>% 
+  group_by(sp, id) %>% 
+  reframe(mean = mean(cor.sp, na.rm = T))

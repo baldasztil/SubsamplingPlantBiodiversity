@@ -16,7 +16,6 @@ library(parallel)
 library(doParallel)
 library(sf)
 library(GWmodel)    # to undertake the GWR
-library(foreach)
 
 # Defining functions -----------------------------------------------------------
 std.error <- function(x) sd(x)/sqrt(length(x))
@@ -43,7 +42,7 @@ subsampling.plants <- function(spec_n) {
     group_by(area_code_l3) %>% 
     summarise(richness_sample = n_distinct(plant_name_id)) %>% 
     rename(LEVEL_COD = area_code_l3) %>% 
-    right_join(rich_overall_bru, by = "LEVEL_COD") %>%
+    left_join(rich_overall_bru, by = "LEVEL_COD") %>%
     left_join(midpoints_red, by = c("LEVEL_COD" = "LEVEL3_COD")) %>% 
     replace(is.na(.), 0) %>% 
     mutate(sp = length(cumulative_namelist)) %>% 
@@ -97,6 +96,11 @@ subsampling.plants <- function(spec_n) {
    
    output_file <- rbind(continents, overall) %>% 
      mutate(sp = length(cumulative_namelist))
+  
+  if (length(cumulative_namelist) %in% seq(1,nrow(plantlist_names),10000)){
+    a <-  paste0("There are ", length(cumulative_namelist) ," species in the subsample")
+    write.table(a, paste0("data/fullsamples_test/checkpoints/Check@_",length(cumulative_namelist),"sp.txt")) 
+  }
   
   # cumulative pattern
   
@@ -212,21 +216,8 @@ rich_overall_bru <- richness_patterns %>%
 ######
 ######
 
-# Define the number of cores you want to use
-num_cores <- 4  # Adjust this based on your system
-
-# Create a cluster
-cl <- makeCluster(num_cores)
-
-
-# Register the cluster with foreach
-registerDoParallel(cl)
-
-samples <- foreach(i = 1:nrow(plantlist_names), .packages = c("tidyverse", "sf", "GWmodel")) %dopar% { 
-  subsampling.plants(i)
-}
+samples <- mclapply(seq(1, nrow(plantlist_names),10000), mc.cores = 4, subsampling.plants, mc.preschedule = F)
 xx <- do.call(bind_rows, samples)
 write.table(xx, paste0("data/fullsamples_test/Samples_iteration_gwr",sample(1:10000000, 1, replace=TRUE),".txt")) 
 
-stopCluster(cl)
 

@@ -17,6 +17,7 @@ library(ape)
 library(phytools)
 library(caper)
 library(dplyr)
+library(parallel)
 #library(picante)
 #library(devtools)
 #library(treeman)
@@ -166,7 +167,7 @@ for (i in 1:100)  {
   samples <- list()
   
   print(paste0("This is iteration ", i))
-  samples[[1]] <- mclapply(seq(0,nrow(plantlist_names),1000), mc.cores = 10, subsampling.plants)
+  samples[[1]] <- mclapply(seq(1,nrow(plantlist_names),100), mc.cores = 30, subsampling.plants)
   xx <- do.call(bind_rows, samples[[1]])
   write.table(xx, paste0("data/phylogeny/Samples_iteration_phylo_",i,".txt"))
 }

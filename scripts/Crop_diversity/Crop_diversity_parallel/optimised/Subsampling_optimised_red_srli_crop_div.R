@@ -17,10 +17,10 @@ library(parallel)
 library(DEoptim)
 library(foreach)
 library(doSNOW)
+library(progress)
 
 
-output <- function(species=NULL,best_corr=NULL)
-{
+output <- function(species=NULL,best_corr=NULL) {
   me <- data.frame(
     Species = species,
     best_corr = best_corr
@@ -48,8 +48,7 @@ objective <- function(subset_indices) {
 }
 
 
-redlist_index <- read.csv("data/red/srli_full.csv")
-
+full_redlist <- read.csv("data/red/srli_full.csv")
 richness_patterns_allplants <- fread("data/richness_patterns.txt")
 
 
@@ -73,12 +72,12 @@ tdwg_1_names$LEVEL1_COD <- as.character(tdwg_1$LEVEL1_COD)
 # Redlist ----------------------------------------------------------------------
 
 # names 
-plantlist_names <- redlist_index %>%  
+plantlist_names <- full_redlist %>%  
    dplyr::select(plant_name_id, taxon_rank, family, lifeform_description,taxon_name)
 
 # distribution
 plantlist_dist <- dist_native_all %>% 
-  filter(plant_name_id %in% redlist_index$plant_name_id)
+  filter(plant_name_id %in% full_redlist$plant_name_id)
 
 # Region names 
 tdwg_codes <- as.data.frame(tdwg_3) %>% 
@@ -105,21 +104,25 @@ cl <- makeCluster(num_cores)
 
 # Register the cluster with foreach
 registerDoSNOW(cl)
-
+iterations <- 5123
+pb <- txtProgressBar(max = iterations, style = 3)
+progress <- function(n) setTxtProgressBar(pb, n)
+opts <- list(progress = progress)
 
 
 solutions <- foreach(i = 1:5123, 
                      .packages = c("tidyverse", "DEoptim"), 
-                     .combine = "rbind",  
+                     .combine = "rbind", 
+                     .options.snow = opts,
                      .verbose = T) %dopar% 
   {
     
     de_result <- DEoptim(objective, lower = i, upper = i,
                          DEoptim.control(VTR = -Inf, strategy = 2,
-                                         bs = FALSE, itermax = 1000, CR = 0.5, F = 0.8, 
+                                         bs = FALSE, itermax = 100, CR = 0.5, F = 0.8, 
                                          storepopfreq = 1, trace = FALSE, parallelType = "foreach"))
     output(de_result$optim$bestmem, de_result$optim$bestval*-1)
   }
 
-write.table(solutions, "data/optimised/DEoptim_results_srli.txt")
+write.table(solutions, "data/optimised/DEoptim_results_srli_100.txt")
 stopCluster(cl)

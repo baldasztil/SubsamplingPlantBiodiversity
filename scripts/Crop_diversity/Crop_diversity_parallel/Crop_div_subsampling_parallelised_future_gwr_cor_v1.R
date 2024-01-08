@@ -18,11 +18,13 @@ library(sf)
 library(GWmodel)    # to undertake the GWR
 library(foreach)
 library(future.apply)
+library(rWCVP)
 
 
-plan(multicore,  workers = parallelly::availableCores())
 
+subsampling.plants(701)
 
+cv
 # Defining functions -----------------------------------------------------------
 std.error <- function(x) sd(x)/sqrt(length(x))
 subsampling.plants <- function(spec_n) {
@@ -92,21 +94,23 @@ subsampling.plants <- function(spec_n) {
    
    continents <- res_extract %>% 
      group_by(LEVEL1_COD) %>% 
-     summarise(cor.gwr = round(mean(Local_R2), digits = 3),
-               cor.sp = round(mean(cor.sp), digits = 3),
-               sd.cor.gwr = round(sd(Local_R2), digits = 3),
-               se.cor.gwr = round(std.error(Local_R2), digits = 3),
-               sample_coef = round(mean(richness_sample_PRED), digits = 3), 
-               sample_se = round(mean(richness_sample_SE), digits = 3)) %>% 
+     summarise(cor.gwr = round(mean(Local_R2), digits = 4),
+               cor.sp = round(mean(cor.sp), digits = 4),
+               sd.cor.gwr = round(sd(Local_R2), digits = 4),
+               se.cor.gwr = round(std.error(Local_R2), digits = 4),
+               cv_gwr = sd.cor.gwr / cor.gwr * 100, 
+               sample_coef = round(mean(richness_sample_PRED), digits = 4), 
+               sample_se = round(mean(richness_sample_SE), digits = 4)) %>% 
      rename(id = LEVEL1_COD)
   
    overall <- res_extract %>% 
-     summarise(cor.gwr =   round(mean(Local_R2), digits = 3),
-               cor.sp = round(mean(cor.sp), digits = 3),
-               sd.cor.gwr  = round(sd(Local_R2), digits = 3),
-               se.cor.gwr  = round(std.error(Local_R2), digits = 3),
-               sample_coef = round(mean(richness_sample_PRED), digits = 3), 
-               sample_se = round(mean(richness_sample_SE), digits = 3), 
+     summarise(cor.gwr =   round(mean(Local_R2), digits = 4),
+               cor.sp = round(mean(cor.sp), digits = 4),
+               sd.cor.gwr  = round(sd(Local_R2), digits = 4),
+               se.cor.gwr  = round(std.error(Local_R2), digits = 4),
+               cv_gwr = sd.cor.gwr / cor.gwr * 100, 
+               sample_coef = round(mean(richness_sample_PRED), digits = 4), 
+               sample_se = round(mean(richness_sample_SE), digits = 4), 
                id = "overall")
    
    output_file <- rbind(continents, overall) %>% 
@@ -114,10 +118,20 @@ subsampling.plants <- function(spec_n) {
             shapiro = shapiro.test(res_extract$residual)$p.value)
 
   # cumulative pattern
+    if (length(cumulative_namelist) %in% seq(1,nrow(plantlist_names),20000)){
+    a <-  paste0("There are ", length(cumulative_namelist) ," species in the subsample")
+    write.table(a, paste0("data/fullsamples_test/checkpoints/Check@_future_sampling",length(cumulative_namelist),"sp.txt")) 
+  }
   
   return(output_file)
   }
 }
+write.sample <- function(x) {
+  xx <- as.data.frame(samples[[x]])
+  write.table(xx, paste0("data/fullsamples_test/Samples_iteration_gwr",sample(1:10000000, 1, replace=TRUE),".txt")) 
+  
+}
+
 
 
 # Working directory ------------------------------------------------------------
@@ -128,7 +142,8 @@ wcvp_raw <- fread("data/wcvp/wcvp_names.txt", header = T)
 dist_raw <- fread("data/wcvp/wcvp_distribution.txt", header = T) 
 tdwg_codes <- fread("data/tdwg_codes.csv", header = T) 
 
-tdwg_3 <- st_read(dsn = "data/wgsrpd-master/level3")
+#tdwg_3 <- st_read(dsn = "data/wgsrpd-master/level3")
+tdwg_3 <- rWCVP::wgsrpd_mapping
 midpoints_red <- st_read(dsn ="data/wgsrpd-master/level3_midpoints") %>% 
   dplyr::select(LEVEL3_COD,geometry)
 
@@ -147,10 +162,10 @@ wcvp_accepted <- wcvp_raw %>%
   filter(species_hybrid == "") %>% 
   filter(genus_hybrid =="")
 
-
 dist_native <- dist_raw %>% 
   filter(introduced == 0) %>% 
   filter(!area == "") %>% 
+  filter(!location_doubtful == 1) %>% 
   filter(plant_name_id %in% wcvp_accepted$plant_name_id)
 
 dist_patterns <- dist_native %>%
@@ -160,9 +175,6 @@ dist_patterns <- dist_native %>%
             region = paste(unique(region), collapse = ','))
 
 plants_full <- inner_join(wcvp_accepted, dist_patterns, by = "plant_name_id")
-
-plants_full_extinct_norange <- wcvp_accepted %>% 
-  filter(!plant_name_id %in% plants_full$plant_name_id)
 
 # baseline richness ------------------------------------------------------------
 # calculating overall richness patterns 
@@ -199,10 +211,10 @@ richness_patterns <- rbind(richness_patterns1,richness_patterns2,
 
 # Analysis ---------------------------------------------------------------------
 plantlist_dist <- dist_native %>% 
-  dplyr::select(plant_name_id,continent_code_l1,region_code_l2,area_code_l3)
+  dplyr::select(plant_name_id,continent_code_l1,area_code_l3)
 
 plantlist_names <- plants_full %>%  
-  dplyr::select(plant_name_id, taxon_rank, family, lifeform_description,taxon_name)
+  dplyr::select(plant_name_id, taxon_rank, family)
 
 rich_overall_bru_bw <- richness_patterns %>% 
   filter(ID =="bru") %>% 
@@ -224,14 +236,14 @@ rich_overall_bru <- richness_patterns %>%
   dplyr::select(-geometry)
 
 
-
 ######
 
-Sys.time()
-results <- future_lapply(seq(1,100,1), subsampling.plants, future.seed = NULL, future.stdout = F)
-Sys.time()
-results_frame <- rbindlist(results)
-write.table(results_frame, paste0("data/fullsamples_test/Samples_iteration_gwr_future",sample(1:10000000, 1, replace=TRUE),".txt")) 
+plan(sequential)
 
+Sys.time()
+results <- future_lapply(seq(1,nrow(plantlist_names),1), subsampling.plants, future.seed = NULL, future.stdout = F)
+Sys.time()
+xx <- rbindlist(results)
+write.table(xx, paste0("data/fullsamples_test/Samples_iteration_gwr_future_170K",sample(1:10000000, 1, replace=TRUE),".txt")) 
 
 

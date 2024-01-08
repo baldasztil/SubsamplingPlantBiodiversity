@@ -17,10 +17,10 @@ library(parallel)
 library(DEoptim)
 library(foreach)
 library(doSNOW)
+library(progress)
 
 
-output <- function(species=NULL,best_corr=NULL)
-{
+output <- function(species=NULL,best_corr=NULL) {
   me <- data.frame(
     Species = species,
     best_corr = best_corr
@@ -48,7 +48,8 @@ objective <- function(subset_indices) {
 }
 
 
-full_redlist <- read.csv("data/red/redlist_full_syn.csv")
+redlist_index <- read.csv("data/red/srli_full.csv")
+
 richness_patterns_allplants <- fread("data/richness_patterns.txt")
 
 
@@ -72,12 +73,12 @@ tdwg_1_names$LEVEL1_COD <- as.character(tdwg_1$LEVEL1_COD)
 # Redlist ----------------------------------------------------------------------
 
 # names 
-plantlist_names <- full_redlist %>%  
+plantlist_names <- redlist_index %>%  
    dplyr::select(plant_name_id, taxon_rank, family, lifeform_description,taxon_name)
 
 # distribution
-dist_native <- dist_native_all %>% 
-  filter(plant_name_id %in% full_redlist$plant_name_id)
+plantlist_dist <- dist_native_all %>% 
+  filter(plant_name_id %in% redlist_index$plant_name_id)
 
 # Region names 
 tdwg_codes <- as.data.frame(tdwg_3) %>% 
@@ -90,8 +91,7 @@ rich_overall_bru <- richness_patterns_allplants %>%
 
 
 # Define lower and upper bounds for each species (dimension)
-lower_bound <- 1  # Start from the first species
-upper_bound <- nrow(plantlist_names) # Go up to the last species
+
 
 # Initialize DE parameters
 
@@ -105,11 +105,17 @@ cl <- makeCluster(num_cores)
 # Register the cluster with foreach
 registerDoSNOW(cl)
 
+iterations <- 5123
+pb <- txtProgressBar(max = iterations, style = 3)
+progress <- function(n) setTxtProgressBar(pb, n)
+opts <- list(progress = progress)
+
 
 
 solutions <- foreach(i = 1:5123, 
                      .packages = c("tidyverse", "DEoptim"), 
                      .combine = "rbind",  
+                     .options.snow = opts,
                      .verbose = T) %dopar% 
   {
     
@@ -120,5 +126,5 @@ solutions <- foreach(i = 1:5123,
     output(de_result$optim$bestmem, de_result$optim$bestval*-1)
   }
 
-write.table(solutions, "data/optimised/DEoptim_results_redlist.txt")
+write.table(solutions, "data/optimised/DEoptim_results_srli.txt")
 stopCluster(cl)

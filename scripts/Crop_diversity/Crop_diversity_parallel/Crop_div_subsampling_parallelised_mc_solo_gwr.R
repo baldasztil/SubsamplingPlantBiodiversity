@@ -14,6 +14,10 @@ library(data.table)
 library(ggplot2)
 library(parallel)
 library(doParallel)
+library(sf)
+library(spData)
+library(spgwr)
+library(GWmodel)    # to undertake the GWR
 # Defining functions -----------------------------------------------------------
 subsampling.plants <- function(spec_n) {
   cumulative_namelist <- c()
@@ -39,63 +43,84 @@ subsampling.plants <- function(spec_n) {
     group_by(area_code_l3) %>% 
     summarise(richness_sample = n_distinct(plant_name_id)) %>% 
     rename(LEVEL_COD = area_code_l3)
-  
+
+  # measuring correlation
   rich_rel <- rich_overall_bru %>% 
-    left_join(sample_rich_bru, by = "LEVEL_COD") %>% 
+    left_join(sample_rich_bru, by = "LEVEL_COD") %>%
+    left_join(midpoints_red, by = c("LEVEL_COD" = "LEVEL3_COD")) %>% 
     replace(is.na(.), 0) %>% 
     mutate(sp = length(cumulative_namelist))
-  # measuring correlation
-  
   # overall
-  rich_rel_bru <- rich_rel %>% 
-    summarise(cor.sp = cor.test(richness_sample, richness,
-                                method="spearman", exact =F)[[4]],
-              cor.pe = cor.test(richness_sample, richness,
-                                method="pearson", exact =F)[[4]]) %>% 
-    mutate(id = "overall",
-           sp = length(cumulative_namelist))
-  # per continent 
-  cor.sp <- rich_rel %>% 
-    split(.$LEVEL1_COD) %>% 
-    map_dbl(~cor.test(.$richness_sample, .$richness, 
-                      method="spearman", data = ., exact =F)[[4]])
-  cor.pe <- rich_rel %>% 
-    split(.$LEVEL1_COD) %>% 
-    map_dbl(~cor.test(.$richness_sample, .$richness, 
-                      method="pearson", data = ., exact =F)[[4]])  
   
-  # bind all
-  spear <- as.data.frame(cor.sp) %>% 
-    mutate(id = rownames(.))
-  rich_rel_con <- as.data.frame(cor.pe) %>% 
-    mutate(id = rownames(.),
-           sp = length(cumulative_namelist)) %>% 
-    left_join(spear, by = "id")
+  rich_rel_shp <- rich_overall_bru %>% 
+    left_join(sample_rich_bru, by = "LEVEL_COD") %>%
+    left_join(midpoints_red, by = c("LEVEL_COD" = "LEVEL3_COD")) %>% 
+    replace(is.na(.), 0) %>% 
+    mutate(sp = length(cumulative_namelist)) %>% 
+    st_sf() %>% 
+    as("Spatial")
+
+   #sink("/dev/nul") 
+  
+  bw <- gwr.sel(richness ~ richness_sample, data=rich_rel_shp,
+        method = "aic",
+        adapt =  F, 
+        verbose = F, 
+        show.error.messages = FALSE)
+  
+  #bw <- bw.gwr(richness ~ richness_sample, data=rich_rel_shp,
+            #   approach = "AIC",
+             #  adaptive = F)
+   #sink()
+   
+   m.gwr <- gwr.basic(richness ~ richness_sample, data=rich_rel_shp,
+                      adaptive = T,
+                      bw = bw, 
+                      cv = T) 
+   
+   
+   res <- as.data.frame(m.gwr$SDF@data)
+   res_extract <- res %>% 
+     select(richness_sample_PRED = richness_sample,Local_R2,richness_sample_SE) %>% 
+     mutate(LEVEL3_COD = rich_rel_shp$LEVEL_COD) %>% 
+     left_join(tdwg_codes, by = "LEVEL3_COD") 
+   
+   
+   continents <- res_extract %>% 
+     group_by(LEVEL1_COD) %>% 
+     summarise(cor.gwr = mean(Local_R2),
+               sample_coef = mean(richness_sample_PRED), 
+               sample_se = mean(richness_sample_SE)) %>% 
+     rename(id = LEVEL1_COD)
+  
+   overall <- res_extract %>% 
+     summarise(cor.gwr = mean(Local_R2),
+               sample_coef = mean(richness_sample_PRED), 
+               sample_se = mean(richness_sample_SE), 
+               id = "overall")
+   
+   output_file <- rbind(continents, overall) %>% 
+     mutate(sp = length(cumulative_namelist))
   
   if (length(cumulative_namelist) %in% seq(1,nrow(plantlist_names),10000)){
-  print(paste0("There are ", length(cumulative_namelist) ," species in the subsample")) 
+    print(paste0("There are ", length(cumulative_namelist) ," species in the subsample")) 
   }
   
   # cumulative pattern
-  return(bind_rows(rich_rel_bru, rich_rel_con))
-}
-
-
-parallel.subsampling <- function (iteration,sample_n) {
-  samples <- list()
-  iterated_samples()
-{
-  }
-  return(samples)
+  
+  return(output_file)
 }
 
 # Working directory ------------------------------------------------------------
 
 # Import data ------------------------------------------------------------------
-
 wcvp_raw <- fread("data/wcvp/wcvp_names.txt", header = T) 
 dist_raw <- fread("data/wcvp/wcvp_distribution.txt", header = T) 
 tdwg_codes <- fread("data/tdwg_codes.csv", header = T) 
+
+tdwg_3 <- st_read(dsn = "data/wgsrpd-master/level3")
+midpoints_red <- st_read(dsn ="data/wgsrpd-master/level3_midpoints") %>% 
+  dplyr::select(LEVEL3_COD,geometry)
 
 # manipulate data --------------------------------------------------------------
 
@@ -104,11 +129,13 @@ wcvp_placed <- wcvp_raw %>%
 
 wcvp_sp <- wcvp_raw %>% 
   filter(taxon_status %in% c("Accepted")) %>% 
-  filter(!taxon_rank %in% c("Genus"))
+  filter(!taxon_rank %in% c("Genus")) 
 
 wcvp_accepted <- wcvp_raw %>% 
   filter(taxon_status %in% c("Accepted")) %>% 
-  filter(taxon_rank %in% c("Species")) 
+  filter(taxon_rank %in% c("Species")) %>% 
+  filter(species_hybrid == "") %>% 
+  filter(genus_hybrid =="")
 
 
 dist_native <- dist_raw %>% 
@@ -169,22 +196,19 @@ plantlist_names <- plants_full %>%
 
 rich_overall_bru <- richness_patterns %>% 
   filter(ID =="bru") %>% 
-  left_join(tdwg_codes, by =c("LEVEL_COD" = "LEVEL3_COD"))
+  left_join(midpoints_red, by =c("LEVEL_COD" = "LEVEL3_COD")) %>% 
+  left_join(tdwg_codes, by =c("LEVEL_COD" = "LEVEL3_COD")) %>% 
+  dplyr::select(-geometry)
 
 ######
-clust <- makeCluster(6)
-clusterExport(clust, c("dist_native","plantlist_dist","plantlist_names","rich_overall_bru"))
-clusterEvalQ(clust, library(tidyverse))
-doParallel::registerDoParallel(clust)
+######
 
-samples <- list()
-for (i in 1:10){
-  samples[[i]] <- parLapply(clust, seq(0,nrow(plantlist_names),1000), 
-                            subsampling.plants)
+for (i in 1:1)  {
+  samples <- list()
+  print(paste0("This is iteration ", i))
+  samples[[1]] <- mclapply(seq(0, nrow(plantlist_names),1), mc.cores = 3, subsampling.plants)
+  xx <- do.call(bind_rows, samples[[1]])
+  write.table(xx, paste0("data/fullsamples_test/Samples_iteration_gwr",sample(1:10000000, 1, replace=TRUE),".txt")) # data/fullsamples_test/
 }
 
 
-stopCluster(clust)
-
-data_out <- as.data.frame(do.call(bind_rows, samples_rel))
-write.table(data_out, "full_samples_rel.txt")
