@@ -76,7 +76,7 @@ deoptim_lapply <- function(sp_num){
   assign("maxima", 0, envir = .GlobalEnv)
   de_result <- DEoptim(objective, lower = sp_num, upper = sp_num,
                        DEoptim.control(VTR = -Inf, strategy = 2,
-                                       bs = FALSE, itermax = 1000, CR = 0.5, F = 0.8, 
+                                       bs = FALSE, itermax = 10, CR = 0.5, F = 0.8, 
                                        storepopfreq = 1, trace = T, c = 0.5, steptol = 100))
   
   return(output(de_result$optim$bestmem, de_result$optim$bestval*-1))
@@ -160,6 +160,7 @@ max_sp <- 5123
 
 solutions_listed <- mclapply(seq(1, max_sp, 1), mc.cores = 30, deoptim_lapply)
 
+deoptim_lapply(100)
 
 solutions <- do.call(rbind, solutions_listed)
 write.table(solutions, "data/optimised/DEoptim_results.txt")

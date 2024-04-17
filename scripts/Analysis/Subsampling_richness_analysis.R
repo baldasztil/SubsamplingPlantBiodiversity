@@ -25,7 +25,10 @@ library(tmaptools)
 library(reactablefmtr)
 library(gridExtra)
 library(rWCVP)
-library(perm.t.test)
+library(MKinfer)
+library(arrow)
+library(plotrix)                              
+
 
 # Defining functions -----------------------------------------------------------
 theme_default.lb.boxplot <- function () {
@@ -129,28 +132,63 @@ tdwg_1_names$LEVEL1_COD <- as.character(tdwg_1$LEVEL1_COD)
 
 
 #Get the path of filenames
-list_data <- list.files("C:/Users/s2117440/OneDrive - Royal Botanic Garden Edinburgh/A_PhD/Chapters/Chapter1_UNEP_KEW/Projects/SubsamplingPlantBiodiversity/data/fullsamples", full.names = TRUE)
+list_data <- list.files("C:/Users/s2117440/OneDrive - Royal Botanic Garden Edinburgh/A_PhD/Chapters/Chapter1_UNEP_KEW/Projects/SubsamplingPlantBiodiversity/data/fullsamples_test", full.names = TRUE)
 #Read them in a list
-samplelist <- lapply(list_data, fread)
+samplelist <- lapply(list_data, read_parquet)
 
 #make big dataframe
-data_out <- as.data.frame(do.call(rbind, samplelist))
-
-
-
+data_out <- rbindlist(samplelist) %>% 
+  filter(sp %in% c(1:300)) 
+  #as.data.frame(do.call(rbind, samplelist)) 
+gc()
+setDT(data_out)
 # Reframe ----------------------------------------------------------------------
+
+
+xx <- data_out[, list("mean_corgw" = mean(cor.sp_gwr_mean), 
+                      "sd_corgw_mean" = mean(cor.sp_gwr_sd, na.rm =T), 
+                      "se_corgw" = std.error(cor.sp_gwr_mean, na.rm =T),
+                      
+                      "mean_pseudor" = mean(pseudo.r.squared),
+                      "sd_pseudor" = sd(pseudo.r.squared, na.rm =T),
+                      "se_pseudor" = std.error(pseudo.r.squared, na.rm =T),
+                      
+                      "n" = length(cor.sp_gwr_mean),
+                      
+                      "lower_ci_corgw" = cor.sp_gwr_mean - error(cor.sp_gwr_mean), 
+                      "upper_ci_corgw" = cor.sp_gwr_mean + error(cor.sp_gwr_mean),
+               
+                      "lower_ci_pseudor" = cor.sp_gwr_mean - error(pseudo.r.squared), 
+                      "upper_ci_pseudor" = cor.sp_gwr_mean + error(pseudo.r.squared)),
+      by = c("continent", "sp")] 
+  
 samples_cumulative_rel <- data_out %>%
-  group_by(id,sp) %>% 
-  mutate( cor.sp = ifelse(is.na(cor.sp), 0, cor.sp)) %>% 
-  summarise(mean = mean(cor.sp, na.rm = TRUE),
-            sd = sd(cor.sp, na.rm = TRUE),
-            n.sample = n()) %>%
+  group_by(continent,sp) %>%  
   mutate(se = sd / sqrt(n.sample),
-         lower.ci = mean - qt(1 - (0.05 / 2), n.sample - 1) * se,
-         upper.ci = mean + qt(1 - (0.05 / 2), n.sample - 1) * se) %>% 
-  left_join(tdwg_1_names, by = c("id" = "LEVEL1_COD")) %>% 
-  mutate(Continent = LEVEL1_NAM,
-         Continent = ifelse(is.na(Continent), "GLOBAL", Continent))
+         lower.ci = mean - qt(1 - (0.05 / 2), 
+                              n.sample - 1) * se,
+         upper.ci = mean + qt(1 - (0.05 / 2), n.sample - 1) * se)  
+  
+  reframe(across(
+    .cols = c(starts_with(c("pseudo", "cor")), 
+                          ends_with("res")), 
+    .fns = list(mean = mean, sd = sd(na.rm = T)), 
+    .names = "{col}_{fn}"
+  ), 
+  n.sample = n()) 
+
+error <- function(x) {
+  qnorm(0.975)*sd(x)/sqrt(length(x))
+} 
+
+upper.ci <- function(x) {
+  mean(x) + qt(1 - (0.05 / 2), 
+               x$n.sample - 1) * std.error(x)
+} 
+
+head(samples_cumulative_rel)
+
+ 
 
 
  unique(samples_cumulative_rel$id)
